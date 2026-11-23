@@ -236,9 +236,16 @@ public final class Engine implements CandleBuilder.Sink {
             else if (position != null && pending == null) sendExit(ExitManager.Reason.EMERGENCY);
         }
         if (position != null) {
-            if (now - position.lastQuoteMillis > 10_000 && (now / 1000) % 15 == 0)
-                log("WARN", "No fresh price for " + position.label + " for " + (now - position.lastQuoteMillis) / 1000 + "s");
-            manageExit(position.lastBid, now);
+            // Use the newest price from ANY source (live feed or option-chain refresh),
+            // so exits keep working even if the feed's depth packets stop.
+            OptionQuote q = quotes.get(position.securityId);
+            if (q != null && q.bid > 0 && q.updatedMillis > position.lastQuoteMillis) {
+                manageExit(q.bid, q.updatedMillis);
+            } else {
+                if (now - position.lastQuoteMillis > 10_000 && (now / 1000) % 15 == 0)
+                    log("WARN", "No fresh price for " + position.label + " for " + (now - position.lastQuoteMillis) / 1000 + "s");
+                manageExit(position.lastBid, now);
+            }
         }
     }
 

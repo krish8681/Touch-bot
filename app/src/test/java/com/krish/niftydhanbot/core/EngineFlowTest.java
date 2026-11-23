@@ -94,6 +94,19 @@ public class EngineFlowTest {
         assertEquals(0, engine.day().consecutiveLosses);
     }
 
+    @Test public void stopFiresFromChainRefreshWithoutLiveFeed() {
+        engine.startTrading();
+        breakout(engine);
+        Position p = engine.position();
+        assertNotNull(p);
+        long now = t0 + 2 * MIN;
+        // Price arrives only through the option-chain refresh path, never onOptionTick.
+        engine.upsertContract("CE1", Signal.Side.CE, 25050, 0.55, 12, 200_000, p.stop - 1, p.stop - 1, p.stop - 0.5, now);
+        engine.onTimer(now);
+        assertNull("stop must fire from chain prices too", engine.position());
+        assertEquals("STOP", trades.get(0).exitReason);
+    }
+
     @Test public void noEntryWhenNotTrading() {
         breakout(engine); // READY, not TRADING
         assertNull(engine.position());

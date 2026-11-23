@@ -1,4 +1,4 @@
-# Nifty Dhan Bot v1.0 (paper trading)
+# Nifty Dhan Bot v1.1 (paper trading)
 
 A NIFTY option-buying bot that runs completely on your Android phone. It uses live Dhan
 prices, decides CE / PE / no trade, picks a strike, sizes the trade from your risk limit,
@@ -79,3 +79,17 @@ The live order code exists (`DhanLiveBroker.java`) but the build flag `LIVE_ORDE
 - `MainActivity` – dark screen; reads a snapshot once a second and sends commands to the service.
 - Tests: `./gradlew testDebugUnitTest`. APK: `./gradlew assembleRelease` → `app/build/outputs/apk/release/NiftyDhanBot-v1.0-release.apk`.
 - GitHub Actions builds the APK on every push (Actions tab → latest run → Artifacts).
+
+## Backtest (tools/backtest/Backtest.java)
+
+Replays NIFTY 1-minute history through the same `Engine` code the app uses. Option prices are
+modelled with Black-Scholes (historical option quotes not available), so treat results as a guide.
+
+```
+javac -d out $(find app/src/main/java/com/krish/niftydhanbot/core -name "*.java") tools/backtest/Backtest.java
+java -cp out Backtest <path-to>/nifty50-historical-data/1min [nolimits] [from=2019-03-01] [to=2023-12-31] [stopAtrMultiple=2.5] ...
+```
+Any `BotConfig` field can be overridden as `name=value`. Data: github.com/technovusin/nifty50-historical-data.
+
+**Result for the v1.x rules (Mar 2019 – Nov 2026): loses money every year, even before charges.
+Do not trade these rules live.**

@@ -103,10 +103,10 @@ public final class BotService extends Service {
         }
         switch (a) {
             case ACTION_STOP: end(); break;
-            case ACTION_TRADE: eh.post(this::startTrading); break;
-            case ACTION_PAUSE: eh.post(() -> engine.pause("paused by you")); break;
-            case ACTION_EMERGENCY: eh.post(() -> engine.emergencyExit(System.currentTimeMillis())); break;
-            case ACTION_ACK: eh.post(() -> engine.acknowledgeRecovery()); break;
+            case ACTION_TRADE: post(this::startTrading); break;
+            case ACTION_PAUSE: post(() -> engine.pause("paused by you")); break;
+            case ACTION_EMERGENCY: post(() -> engine.emergencyExit(System.currentTimeMillis())); break;
+            case ACTION_ACK: post(() -> engine.acknowledgeRecovery()); break;
             default: break;
         }
         return START_STICKY;
@@ -137,13 +137,13 @@ public final class BotService extends Service {
         eh = new Handler(engineThread.getLooper());
         io = Executors.newSingleThreadExecutor();
 
-        eh.post(() -> {
+        post(() -> {
             engine = new Engine(cfg, new Charges(), new PaperBroker(id -> engine.quote(id), cfg.paperSlippagePts), listener);
             restoreDayStats();
             engine.onTimer(System.currentTimeMillis());
             engine.setAvailableFunds(cfg.capital + engine.day().realizedPnl);
             engine.setState(BotState.STARTING, "connecting to Dhan");
-            eh.post(tick);
+            post(tick);
         });
         io.execute(this::connect);
     }
@@ -153,7 +153,7 @@ public final class BotService extends Service {
         if (feed != null) feed.stop();
         if (eh != null) {
             eh.removeCallbacksAndMessages(null);
-            eh.post(() -> {
+            post(() -> {
                 if (engine != null) {
                     if (engine.position() != null) listener.onAlert("Bot stopped while holding " + engine.position().label + " (paper). It is no longer managed.");
                     engine.setState(BotState.OFF, "stopped by you");
@@ -190,7 +190,7 @@ public final class BotService extends Service {
 
             List<Engine.BrokerPosition> pos = api.foPositions();
             lastReconcile = System.currentTimeMillis();
-            eh.post(() -> engine.reconcile(pos));
+            post(() -> engine.reconcile(pos));
 
             expiry = pickExpiry(api.expiries());
             if (expiry.isEmpty()) { fail("No NIFTY expiry found from Dhan"); return; }
@@ -199,7 +199,7 @@ public final class BotService extends Service {
             LocalDate today = LocalDate.now(Engine.IST);
             try {
                 List<com.krish.niftydhanbot.core.Candle> hist = api.niftyIntraday(today);
-                eh.post(() -> engine.seedCandles(hist));
+                post(() -> engine.seedCandles(hist));
             } catch (Exception e) {
                 warn("Could not load earlier candles (" + e.getMessage() + "). The bot will warm up from live ticks (~27 min).");
             }
@@ -215,7 +215,7 @@ public final class BotService extends Service {
 
         feed = new DhanFeed(http, id, token, feedCallback);
         feed.start();
-        eh.post(() -> {
+        post(() -> {
             if (engine.state() == BotState.STARTING) engine.setState(BotState.READY, "connected; tap Start trading");
         });
         scheduleIo();
@@ -232,7 +232,7 @@ public final class BotService extends Service {
                     if (now - lastReconcile > 60_000) {
                         lastReconcile = now;
                         List<Engine.BrokerPosition> pos = api.foPositions();
-                        eh.post(() -> engine.reconcile(pos));
+                        post(() -> engine.reconcile(pos));
                         dhanFunds = api.funds().available;
                     }
                 } catch (InterruptedException e) {
@@ -240,7 +240,7 @@ public final class BotService extends Service {
                 } catch (DhanApi.DhanException e) {
                     if (e.code == 401 || e.code == 403) {
                         lastError = "Dhan token expired";
-                        eh.post(() -> {
+                        post(() -> {
                             engine.pause("token expired");
                             engine.setState(BotState.ERROR, "Dhan token expired — paste a new one, then restart the bot");
                             listener.onAlert("Dhan token expired. Exits now use the last known prices only.");
@@ -259,7 +259,7 @@ public final class BotService extends Service {
         lastChainMillis = System.currentTimeMillis();
         DhanApi.Chain c = api.optionChain(expiry);
         long now = System.currentTimeMillis();
-        eh.post(() -> {
+        post(() -> {
             double spot = engine.spot() > 0 ? engine.spot() : c.spot;
             Set<String> want = new LinkedHashSet<>();
             for (DhanApi.ChainRow r : c.rows) {
@@ -304,9 +304,9 @@ public final class BotService extends Service {
         @Override public void onPrice(int segment, String securityId, double ltp, double bid, double ask, double oi) {
             long now = System.currentTimeMillis();
             if (segment == FeedParser.SEG_IDX_I && DhanApi.NIFTY_ID.equals(securityId)) {
-                if (ltp > 0) eh.post(() -> engine.onSpot(ltp, now));
+                if (ltp > 0) post(() -> engine.onSpot(ltp, now));
             } else if (segment == FeedParser.SEG_NSE_FNO) {
-                eh.post(() -> engine.onOptionTick(securityId, ltp, bid, ask, now));
+                post(() -> engine.onOptionTick(securityId, ltp, bid, ask, now));
             }
         }
 
@@ -323,11 +323,15 @@ public final class BotService extends Service {
         @Override public void run() {
             if (!running) return;
             long now = System.currentTimeMillis();
-            engine.onTimer(now);
-            engine.setAvailableFunds(cfg.capital + engine.day().realizedPnl);
-            publish();
-            if (now - lastNotifMillis > 5_000) { lastNotifMillis = now; updateStatusNotification(); }
-            eh.postDelayed(this, 1_000);
+            try {
+                engine.onTimer(now);
+                engine.setAvailableFunds(cfg.capital + engine.day().realizedPnl);
+                publish();
+                if (now - lastNotifMillis > 5_000) { lastNotifMillis = now; updateStatusNotification(); }
+            } catch (RuntimeException e) {
+                engineError(e);
+            }
+            eh.postDelayed(this, 1_000);  // re-arms even after an error (see post())
         }
     };
 
@@ -451,16 +455,40 @@ public final class BotService extends Service {
 
     // ------------------------------------------------------------------ helpers
 
+    /** Run on the engine thread; an unexpected error is logged instead of crashing the app (exits keep running). */
+    private void post(Runnable r) {
+        if (eh == null) return;
+        eh.post(() -> {
+            try { r.run(); } catch (RuntimeException e) { engineError(e); }
+        });
+    }
+
+    private long lastEngineErrorAlert;
+
+    private void engineError(RuntimeException e) {
+        String msg = "Internal error: " + e;
+        StackTraceElement[] st = e.getStackTrace();
+        if (st.length > 0) msg += " at " + st[0];
+        BotHub.log(now() + " ERROR " + msg);
+        journal.event(today(), "ERROR", msg);
+        long t = System.currentTimeMillis();
+        if (t - lastEngineErrorAlert > 60_000) {
+            lastEngineErrorAlert = t;
+            telegram.send(msg);
+            showAlert("Bot hit an internal error (see Log). It keeps running and managing exits.");
+        }
+    }
+
     private void fail(String msg) {
         lastError = msg;
-        eh.post(() -> {
+        post(() -> {
             engine.setState(BotState.ERROR, msg);
             listener.onAlert(msg);
         });
     }
 
-    private void info(String msg) { eh.post(() -> listener.onLog("INFO", msg)); }
-    private void warn(String msg) { eh.post(() -> listener.onLog("WARN", msg)); }
+    private void info(String msg) { post(() -> listener.onLog("INFO", msg)); }
+    private void warn(String msg) { post(() -> listener.onLog("WARN", msg)); }
 
     static String now() { return LocalTime.now(Engine.IST).format(HMS); }
     static String today() { return LocalDate.now(Engine.IST).toString(); }

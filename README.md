@@ -1,4 +1,4 @@
-# Nifty Dhan Bot v1.1 (paper trading)
+# Nifty Dhan Bot v1.2 (paper trading)
 
 A NIFTY option-buying bot that runs completely on your Android phone. It uses live Dhan
 prices, decides CE / PE / no trade, picks a strike, sizes the trade from your risk limit,
@@ -93,3 +93,7 @@ Any `BotConfig` field can be overridden as `name=value`. Data: github.com/techno
 
 **Result for the v1.x rules (Mar 2019 – Nov 2026): loses money every year, even before charges.
 Do not trade these rules live.**
+
+**ORB (opening-range breakout, `strategy=ORB`) result, Mar 2019 – Nov 2026:** best version on 2019–23
+(30-min range, stop = full range, hold ≤ 2 h) was break-even (PF 1.01, 93 trades); on unseen 2024–26 it
+made only 3 trades (the stop no longer fits the ₹1,500 risk budget at today's NIFTY level). No edge.

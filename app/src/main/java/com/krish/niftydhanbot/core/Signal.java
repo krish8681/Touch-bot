@@ -15,6 +15,8 @@ public final class Signal {
     public final double atr;
     public final long timeMillis;
     public final List<String> reasons;
+    /** Suggested stop distance in NIFTY points (engine converts with delta). NaN = use ATR rule. */
+    public double stopSpotPts = Double.NaN;
 
     public Signal(Side side, Regime regime, int strength, double spot, double atr, long timeMillis, List<String> reasons) {
         this.side = side;

@@ -9,7 +9,7 @@ public final class Charges {
     public double brokeragePerOrder = 20.0;
     public double exchangeTxnRate = 0.0003503;  // on premium turnover, both sides
     public double sebiRate = 0.000001;          // ₹10 per crore
-    public double sttSellRate = 0.001;          // 0.1% on sell-side premium
+    public double sttSellRate = 0.0015;         // 0.15% on sell-side premium (from 1 Apr 2026)
     public double stampBuyRate = 0.00003;       // 0.003% on buy-side premium
     public double gstRate = 0.18;               // on brokerage + exchange + SEBI
 

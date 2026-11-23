@@ -26,6 +26,15 @@ public final class BotConfig {
     public int entryEndMin = 14 * 60 + 45;
     public int squareOffMin = 15 * 60 + 15;
 
+    /** Which entry rules to use: "TREND" (1-min trend breakout) or "ORB" (opening-range breakout). */
+    public String strategy = "TREND";
+
+    // Opening-range breakout
+    public int orbMinutes = 15;                // range = first N minutes from 9:15
+    public int orbLastEntryMin = 12 * 60;      // no ORB entries after this time
+    public double orbStopRangeFrac = 0.5;      // stop distance = this × range (in NIFTY points)
+    public double orbMaxRangePts = 150;        // skip days with a huge opening range
+
     // Signal (trend-following: trade with the current trend, never predict)
     public int emaFast = 9;
     public int emaSlow = 21;

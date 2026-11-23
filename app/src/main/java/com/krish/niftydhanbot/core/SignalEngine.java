@@ -14,6 +14,62 @@ public final class SignalEngine {
     public SignalEngine(BotConfig cfg) { this.cfg = cfg; }
 
     public Signal evaluate(List<Candle> bars, long nowMillis) {
+        return "ORB".equals(cfg.strategy) ? openingRange(bars, nowMillis) : trend(bars, nowMillis);
+    }
+
+    /**
+     * Opening-range breakout: range = high/low of the first orbMinutes from 9:15.
+     * CE on the FIRST 1-min close above the range high, PE on the first close below the low.
+     * Stop distance = orbStopRangeFrac × range (NIFTY points). Bars must be today's only.
+     */
+    Signal openingRange(List<Candle> bars, long nowMillis) {
+        List<String> why = new ArrayList<>();
+        int n = bars.size();
+        int start = 9 * 60 + 15, end = start + cfg.orbMinutes;
+        double hi = Double.NEGATIVE_INFINITY, lo = Double.POSITIVE_INFINITY;
+        int inRange = 0, firstAfter = -1;
+        for (int i = 0; i < n; i++) {
+            int m = Engine.minuteOfDay(bars.get(i).startMillis);
+            if (m >= start && m < end) { hi = Math.max(hi, bars.get(i).high); lo = Math.min(lo, bars.get(i).low); inRange++; }
+            else if (m >= end && firstAfter < 0) firstAfter = i;
+        }
+        double close = n == 0 ? 0 : bars.get(n - 1).close;
+        if (inRange < cfg.orbMinutes - 1 || firstAfter < 0) {
+            why.add("opening range not complete (" + inRange + "/" + cfg.orbMinutes + " min)");
+            return new Signal(Signal.Side.NO_TRADE, Signal.Regime.WARMING_UP, 0, close, Double.NaN, nowMillis, why);
+        }
+        double range = hi - lo;
+        why.add(String.format(java.util.Locale.US, "opening range %.1f–%.1f (%.0f pts)", lo, hi, range));
+        int lastMin = Engine.minuteOfDay(bars.get(n - 1).startMillis);
+        if (lastMin > cfg.orbLastEntryMin) {
+            why.add("past last ORB entry time");
+            return new Signal(Signal.Side.NO_TRADE, Signal.Regime.SIDEWAYS, 0, close, range, nowMillis, why);
+        }
+        if (range <= 0 || range > cfg.orbMaxRangePts) {
+            why.add("opening range too wide — skip today");
+            return new Signal(Signal.Side.NO_TRADE, Signal.Regime.SIDEWAYS, 0, close, range, nowMillis, why);
+        }
+        boolean brokeUp = false, brokeDown = false;
+        for (int i = firstAfter; i < n - 1; i++) {
+            if (bars.get(i).close > hi) brokeUp = true;
+            if (bars.get(i).close < lo) brokeDown = true;
+        }
+        Signal s;
+        if (close > hi && !brokeUp) {
+            why.add("first close above the range");
+            s = new Signal(Signal.Side.CE, Signal.Regime.UP, 70, close, range, nowMillis, why);
+        } else if (close < lo && !brokeDown) {
+            why.add("first close below the range");
+            s = new Signal(Signal.Side.PE, Signal.Regime.DOWN, 70, close, range, nowMillis, why);
+        } else {
+            why.add(close > hi || close < lo ? "breakout already taken earlier" : "inside the range");
+            return new Signal(Signal.Side.NO_TRADE, Signal.Regime.SIDEWAYS, 0, close, range, nowMillis, why);
+        }
+        s.stopSpotPts = cfg.orbStopRangeFrac * range;
+        return s;
+    }
+
+    Signal trend(List<Candle> bars, long nowMillis) {
         List<String> why = new ArrayList<>();
         int n = bars.size();
         int need = Math.max(cfg.emaSlow + 6, cfg.atrPeriod + 2);

@@ -274,7 +274,8 @@ public final class Engine implements CandleBuilder.Sink {
         if (q != null) {
             limit = PaperBroker.round(q.ask + cfg.entryBufferPts);
             double d = Math.abs(q.delta) > 0 ? Math.abs(q.delta) : 0.5;
-            stopPts = PaperBroker.round(Math.max(cfg.minStopPoints, d * cfg.stopAtrMultiple * s.atr));
+            double spotStop = Double.isNaN(s.stopSpotPts) ? cfg.stopAtrMultiple * s.atr : s.stopSpotPts;
+            stopPts = PaperBroker.round(Math.max(cfg.minStopPoints, d * spotStop));
             stop = q.ask - stopPts;
             if (stop > 0) size = sizer.size(q.ask, stop, availableFunds);
         }

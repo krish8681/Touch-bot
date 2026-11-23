@@ -46,6 +46,7 @@ public class Backtest {
                 if (f.getType() == int.class) f.setInt(cfg, Integer.parseInt(o.getValue()));
                 else if (f.getType() == double.class) f.setDouble(cfg, Double.parseDouble(o.getValue()));
                 else if (f.getType() == boolean.class) f.setBoolean(cfg, Boolean.parseBoolean(o.getValue()));
+                else if (f.getType() == String.class) f.set(cfg, o.getValue());
             } catch (NoSuchFieldException ignored) {}
         }
         List<TradeRecord> trades = new ArrayList<>();
@@ -195,7 +196,7 @@ public class Backtest {
     // ------------------------------------------------------------------ report
 
     static void report(List<TradeRecord> trades, int nDays, int[] signals, Map<String, Integer> blocks, double ivMult, double half, boolean quiet) {
-        System.out.printf(Locale.US, "Settings: IV = 20-day realised vol × %.2f, spread %.2f pts, slippage 0.5/side, charges on%n", ivMult, half * 2);
+        System.out.printf(Locale.US, "Settings: IV = 20-day realised vol × %.2f, spread %.2f pts, slippage 0.5/side, charges on (STT 0.15%%)%n", ivMult, half * 2);
         System.out.printf(Locale.US, "Days tested %d | CE signals %d, PE signals %d | trades %d%n", nDays, signals[0], signals[1], trades.size());
         System.out.println("\nYear   Trades  Win%   Net ₹      Avg win  Avg loss  PF    MaxDD ₹   Charges ₹");
         Map<Integer, List<TradeRecord>> byYear = new TreeMap<>();

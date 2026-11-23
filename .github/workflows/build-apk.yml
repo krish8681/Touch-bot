@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -27,14 +30,27 @@ jobs:
       - name: Build APK
         run: ./gradlew --no-daemon assembleRelease
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: NiftyDhanBot-APK
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: test-reports
           path: app/build/reports/tests/
+
+      - name: Publish APK as a download (GitHub release)
+        if: github.ref == 'refs/heads/nifty-dhan-bot'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(grep -oP 'def appVersion = "\K[^"]+' app/build.gradle)
+          TAG="nifty-dhan-bot-v$VER"
+          gh release delete "$TAG" -y --cleanup-tag || true
+          gh release create "$TAG" app/build/outputs/apk/release/*.apk \
+            --target "$GITHUB_SHA" --prerelease \
+            --title "Nifty Dhan Bot v$VER (paper trading)" \
+            --notes "Paper trading only. Live orders are locked in this build. Built from $GITHUB_SHA."

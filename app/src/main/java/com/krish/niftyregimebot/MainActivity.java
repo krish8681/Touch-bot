@@ -88,6 +88,7 @@ public final class MainActivity extends Activity {
 
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
+        Reminder.schedule(this);
         show(0);
     }
 
@@ -166,6 +167,7 @@ public final class MainActivity extends Activity {
         add(t, s.state + "\n", stateColor(s.state));
         add(t, explain(s.state, s.live) + "\n", DIM);
         if (!s.lastError.isEmpty() && s.state == BotState.ERROR) add(t, s.lastError + "\n", RED);
+        if (s.state != BotState.OFF) for (String w : s.warnings) add(t, "⚠ " + w + "\n", w.contains("expired") ? RED : AMBER);
 
         add(t, "\nMARKET\n", DIM);
         long age = s.spotMillis == 0 ? -1 : (now - s.spotMillis) / 1000;
@@ -174,6 +176,11 @@ public final class MainActivity extends Activity {
         add(t, "Feed   ", DIM); add(t, (s.feedConnected ? "live" : s.feedNote) + "\n", s.feedConnected ? GREEN : AMBER);
         add(t, "Expiry " + (s.expiry.isEmpty() ? "-" : s.expiry) + "   contracts live " + s.contracts + "\n", DIM);
         if (s.dhanFunds >= 0) add(t, "Dhan funds ₹" + BotService.money(s.dhanFunds) + "\n", DIM);
+        if (s.state != BotState.OFF) {
+            if (s.tokenAgeHours >= 0) add(t, String.format(Locale.US, "Token age %.1f h%s\n", s.tokenAgeHours,
+                    s.autoRenew ? " (auto-renews after 20 h)" : " (expires at 24 h)"), s.tokenAgeHours >= 20 ? AMBER : DIM);
+            add(t, "Bars fixed from Dhan data: " + s.barsFixed + (s.waitingForDhanBar ? "   (checking latest bar…)" : "") + "\n", DIM);
+        }
 
         add(t, "\nBOT READING\n", DIM);
         add(t, "Trend   ", DIM); add(t, s.regime + "\n", regimeColor(s.regime));
@@ -259,6 +266,8 @@ public final class MainActivity extends Activity {
         EditText token = field(col, "Access token (leave empty to keep the saved one)", "", true);
         col.addView(text(settings.token().isEmpty() ? "No token saved" : "Token saved (hidden). Dhan tokens last about 24 hours.", 12, DIM, false));
 
+        CheckBox autoRenew = check(col, "Auto-renew the Dhan token before it expires (works for tokens made on Dhan Web)", settings.autoRenewToken());
+
         section(col, "How long to hold");
         CheckBox weekly = check(col, "WEEKLY: hold for days (exit the day before expiry). Off = INTRADAY: close by 15:15", settings.weekly());
 
@@ -281,6 +290,10 @@ public final class MainActivity extends Activity {
         CheckBox lotOk = check(col, "I checked this lot size is correct", settings.lotSizeConfirmed());
         EditText vix = field(col, "India VIX security ID on Dhan (IDX_I)", settings.vixId(), false);
 
+        section(col, "NSE holidays");
+        col.addView(text("Built in: all 2026 NSE holidays. Add next year's dates when NSE publishes them (usually in December).", 12, DIM, false));
+        EditText holidays = field(col, "Extra holidays (yyyy-MM-dd, comma separated)", settings.extraHolidays(), false);
+
         section(col, "Telegram alerts (optional)");
         EditText tgToken = field(col, "Bot token (leave empty to keep the saved one)", "", true);
         EditText tgChat = field(col, "Chat ID", settings.telegramChat(), false);
@@ -298,12 +311,25 @@ public final class MainActivity extends Activity {
                 put("stop_pct", stop, 10, 100);
                 put("lot_size", lot, 1, 5000);
                 put("max_lots", maxLots, 1, 100);
+                String hol = holidays.getText().toString().trim();
+                for (String h : hol.split("[,\\s]+")) {
+                    if (h.isEmpty()) continue;
+                    try { java.time.LocalDate.parse(h); } catch (RuntimeException ex) { throw new IllegalArgumentException("Holiday not a date (use yyyy-MM-dd): " + h); }
+                }
+                boolean newToken = !token.getText().toString().trim().isEmpty();
+                settings.saveExtraHolidays(hol);
+                settings.putBool("auto_renew_token", autoRenew.isChecked());
                 settings.saveCredentials(client.getText().toString(), token.getText().toString());
                 settings.saveTelegram(tgToken.getText().toString(), tgChat.getText().toString());
                 settings.saveVixId(vix.getText().toString().isEmpty() ? "21" : vix.getText().toString());
                 settings.putBool("weekly", weekly.isChecked());
                 settings.putBool("lot_size_confirmed", lotOk.isChecked());
-                Toast.makeText(this, "Saved. Stop and start the bot to use new settings.", Toast.LENGTH_LONG).show();
+                if (newToken && BotHub.get().state != BotState.OFF) {
+                    BotService.send(this, BotService.ACTION_RELOAD);
+                    Toast.makeText(this, "Saved. Reconnecting with the new token now. Other changes apply after a bot restart.", Toast.LENGTH_LONG).show();
+                } else {
+                    Toast.makeText(this, "Saved. Stop and start the bot to use new settings.", Toast.LENGTH_LONG).show();
+                }
                 show(4);
             } catch (IllegalArgumentException e) {
                 Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();

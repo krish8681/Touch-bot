@@ -53,7 +53,10 @@ import okhttp3.OkHttpClient;
  */
 public final class BotService extends Service {
     public static final String ACTION_START = "start", ACTION_STOP = "stop", ACTION_TRADE = "trade",
-            ACTION_PAUSE = "pause", ACTION_EMERGENCY = "emergency", ACTION_ACK = "ack";
+            ACTION_PAUSE = "pause", ACTION_EMERGENCY = "emergency", ACTION_ACK = "ack", ACTION_RELOAD = "reload";
+
+    /** True while the service is running in this process (used by the morning reminder). */
+    public static volatile boolean isRunning;
 
     private static final int NOTIF_STATUS = 1;
     private static final String CH_STATUS = "status", CH_ALERTS = "alerts";
@@ -88,6 +91,14 @@ public final class BotService extends Service {
     private long startedMillis;
     private String vixId = "21";
 
+    // v1.1 data fixes
+    private volatile int ioGen;                      // bumps to stop the current io loop (reconnect)
+    private volatile long pendingBarStart;           // engine waits for Dhan's copy of this bar
+    private volatile Set<String> lastWanted = new java.util.LinkedHashSet<>();
+    private volatile boolean tokenExpired;
+    private volatile long lastVixTickMillis;
+    private volatile boolean vixHistoryOk;
+    private long lastBarSync, lastFullBarSync, lastTokenWarn, lastWakeRenew, renewFailedMillis;
     /** Lets the engine be built before Dhan is connected; live orders go through once it is. */
     private static final class LiveRef implements Broker {
         volatile DhanLiveBroker target;
@@ -113,6 +124,10 @@ public final class BotService extends Service {
         String a = intent == null ? ACTION_START : String.valueOf(intent.getAction());
         if (ACTION_START.equals(a)) {
             if (!running) begin();
+            return START_STICKY;
+        }
+        if (ACTION_RELOAD.equals(a)) {
+            if (running) reconnect("new settings / token");
             return START_STICKY;
         }
         if (!running) {
@@ -143,11 +158,15 @@ public final class BotService extends Service {
 
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wake = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "NiftyRegimeBot:engine");
-        wake.acquire(9 * 60 * 60 * 1000L);  // released on stop; 9h safety cap
+        wake.setReferenceCounted(false);
+        wake.acquire(12 * 60 * 60 * 1000L);  // renewed every 30 min while running; released on stop
+        lastWakeRenew = System.currentTimeMillis();
+        isRunning = true;
 
         settings = new Settings(this);
         journal = new Journal(this);
         cfg = settings.config();
+        MarketClock.setExtraHolidays(settings.extraHolidayList());
         liveMode = settings.live();
         vixId = settings.vixId();
         http = new OkHttpClient();
@@ -159,7 +178,8 @@ public final class BotService extends Service {
         io = Executors.newSingleThreadExecutor();
 
         post(() -> {
-            Broker broker = liveMode ? liveRef : new PaperBroker(id -> engine.quote(id), cfg.paperSlippage);
+            Broker broker = liveMode ? liveRef
+                    : new PaperBroker(id -> engine.quote(id), cfg.paperSlippage, cfg.depthMaxAgeMillis, System::currentTimeMillis);
             engine = new Engine(cfg, new Charges(), broker, listener);
             restoreDayStats();
             restorePosition();
@@ -173,6 +193,9 @@ public final class BotService extends Service {
 
     private void end() {
         running = false;
+        isRunning = false;
+        ioGen++;
+        Reminder.schedule(this);
         if (feed != null) feed.stop();
         if (eh != null) {
             eh.removeCallbacksAndMessages(null);
@@ -211,8 +234,12 @@ public final class BotService extends Service {
             fail("Add your Dhan client ID and access token in Settings");
             return;
         }
+        if (settings.tokenMadeMillis() == 0) settings.saveToken(token, System.currentTimeMillis());  // age unknown: count from now
+        double ageH = (System.currentTimeMillis() - settings.tokenMadeMillis()) / 3_600_000.0;
+        if (ageH >= 24) warn(String.format(Locale.US, "Dhan token is %.0f hours old — it has probably expired. Paste a new one if connecting fails.", ageH));
         api = new DhanApi(http, id, token);
         if (liveMode) liveRef.target = new DhanLiveBroker(api, cfg.holding == Config.Holding.WEEKLY);
+        tokenExpired = false;
         try {
             DhanApi.Funds f = api.funds();
             dhanFunds = f.available;
@@ -236,12 +263,16 @@ public final class BotService extends Service {
             }
             try {
                 List<Double> vix = api.indexDailyCloses(vixId, today.minusDays(400), today.plusDays(1));
+                vixHistoryOk = vix.size() >= 60;
                 post(() -> engine.setVixHistory(vix));
             } catch (Exception e) {
+                vixHistoryOk = false;
                 warn("Could not load India VIX history (id " + vixId + "): " + e.getMessage() + ". IV level will use ATM IV.");
             }
 
             refreshChains(true);
+            if (!MarketClock.tradingDay(today)) info("Market is closed today (weekend or NSE holiday). The bot will wait.");
+            if (MarketClock.holidayListOutdated(today)) warn("NSE holiday list has no dates for " + today.getYear() + ". Add them in Settings.");
         } catch (DhanApi.DhanException e) {
             fail(e.code == 401 || e.code == 403 ? "Dhan rejected the token (expired or wrong). Paste a fresh token in Settings." : e.getMessage());
             return;
@@ -252,10 +283,27 @@ public final class BotService extends Service {
 
         feed = new DhanFeed(http, id, token, feedCallback, vixId);
         feed.start();
+        if (!lastWanted.isEmpty()) feed.setOptions(lastWanted);
         post(() -> {
             if (engine.state() == BotState.STARTING) engine.setState(BotState.READY, "connected; tap Start trading");
         });
-        loopIo();
+        loopIo(ioGen);
+    }
+
+    /** Drop the Dhan connection and connect again (new token or settings). The open position stays managed. */
+    private void reconnect(String why) {
+        ioGen++;
+        if (feed != null) feed.stop();
+        feedConnected = false;
+        feedNote = "reconnecting";
+        settings = new Settings(this);
+        post(() -> {
+            if (engine.state() == BotState.ERROR && (tokenExpired || lastError.contains("token") || lastError.contains("Dhan")))
+                engine.setState(BotState.STARTING, "reconnecting: " + why);
+            listener.onLog("INFO", "Reconnecting to Dhan (" + why + ")");
+        });
+        lastError = "";
+        io.execute(this::connect);
     }
 
     private void refreshExpiries() throws IOException {
@@ -269,29 +317,36 @@ public final class BotService extends Service {
         post(() -> engine.setTradeExpiry(e));
     }
 
-    private void loopIo() {
+    private void loopIo(int gen) {
         io.execute(() -> {
-            while (running && !Thread.currentThread().isInterrupted()) {
+            while (running && gen == ioGen && !Thread.currentThread().isInterrupted()) {
                 try {
                     Thread.sleep(1_000);
                     long now = System.currentTimeMillis();
+                    boolean open = MarketClock.sessionOpen(now);
                     if (now - lastExpiryListMillis > 30 * 60_000L) refreshExpiries();
-                    if (now - lastChainMillis > 12_000) refreshChains(false);
-                    if (now - lastReconcile > 60_000) {
+                    if (now - lastChainMillis > (open ? 12_000 : 120_000)) refreshChains(false);
+                    syncBars(now, open);
+                    // Paper mode does not need Dhan's positions or funds every minute (checked once at start).
+                    if (liveMode && now - lastReconcile > 60_000) {
                         lastReconcile = now;
                         List<BrokerPosition> pos = api.foPositions();
                         post(() -> engine.reconcile(pos));
                         dhanFunds = api.funds().available;
                     }
+                    maybeRenewToken(now);
                 } catch (InterruptedException e) {
                     return;
                 } catch (DhanApi.DhanException e) {
                     if (e.code == 401 || e.code == 403) {
+                        tokenExpired = true;
                         lastError = "Dhan token expired";
                         post(() -> {
                             engine.pause("token expired");
-                            engine.setState(BotState.ERROR, "Dhan token expired — paste a new one, then restart the bot");
-                            listener.onAlert("Dhan token expired. Exits now use the last known prices only.");
+                            engine.setState(BotState.ERROR, "Dhan token expired — paste a new one in Settings and tap Save");
+                            Position p = engine.position();
+                            listener.onAlert("Dhan token expired" + (p != null ? " while holding " + p.type.title
+                                    + ". The bot cannot see prices or exit until you paste a new token in Settings and tap Save." : ". Paste a new one in Settings."));
                         });
                         return;
                     }
@@ -302,6 +357,71 @@ public final class BotService extends Service {
             }
         });
     }
+
+    /**
+     * Ask Dhan for its own copy of recent bars: quickly after each bar closes (the engine waits
+     * up to a minute for it), and every 10 minutes in market hours to repair any gaps.
+     */
+    private void syncBars(long now, boolean open) throws IOException {
+        boolean wanted = pendingBarStart > 0 && now - lastBarSync >= 5_000;
+        boolean periodic = open && now - lastFullBarSync >= 10 * 60_000L;
+        if (!wanted && !periodic) return;
+        lastBarSync = now;
+        if (periodic) lastFullBarSync = now;
+        LocalDate today = LocalDate.now(MarketClock.IST);
+        try {
+            List<Candle> bars = api.niftyBars(cfg.barMinutes(), MarketClock.previousTradingDay(today), today);
+            post(() -> engine.onDhanBars(bars));
+        } catch (DhanApi.DhanException e) {
+            if (e.code == 401 || e.code == 403) throw e;
+            if (periodic) warn("Could not fetch Dhan's bars: " + e.getMessage());
+        } catch (IOException e) {
+            if (periodic) warn("Could not fetch Dhan's bars: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Dhan tokens last 24 hours. Between 20 and 24 hours old the bot swaps it for a fresh one
+     * (Dhan's RenewToken; works for tokens made on Dhan Web) when no order is working.
+     */
+    private void maybeRenewToken(long now) throws IOException {
+        long made = settings.tokenMadeMillis();
+        if (made == 0) return;
+        double ageH = (now - made) / 3_600_000.0;
+        if (ageH < 20) return;
+        if (ageH < 24 && settings.autoRenewToken() && pendingJob.isEmpty() && now - renewFailedMillis > 30 * 60_000L) {
+            DhanApi.Renewed r;
+            try {
+                r = api.renewToken();
+            } catch (IOException e) {
+                renewFailedMillis = now;
+                post(() -> listener.onAlert("Could not renew the Dhan token (" + e.getMessage() + "). Paste a new token in Settings within "
+                        + String.format(Locale.US, "%.0f", Math.max(0, 24 - ageH)) + " hours."));
+                return;
+            }
+            if (r.accessToken.length() < 20) {
+                renewFailedMillis = now;
+                post(() -> listener.onAlert("Dhan's token renewal answered without a token. Paste a new token in Settings now."));
+                return;
+            }
+            settings.saveToken(r.accessToken, now);
+            String id = settings.clientId();
+            api = new DhanApi(http, id, r.accessToken);
+            if (liveMode) liveRef.target = new DhanLiveBroker(api, cfg.holding == Config.Holding.WEEKLY);
+            if (feed != null) feed.stop();
+            feed = new DhanFeed(http, id, r.accessToken, feedCallback, vixId);
+            feed.start();
+            if (!lastWanted.isEmpty()) feed.setOptions(lastWanted);
+            info("Dhan token renewed for 24 hours" + (r.expiryTime.isEmpty() ? "" : " (expires " + r.expiryTime + ")"));
+            return;
+        }
+        if (now - lastTokenWarn > 60 * 60_000L) {
+            lastTokenWarn = now;
+            post(() -> listener.onAlert(String.format(Locale.US, "Dhan token is %.0f hours old and expires at 24 hours. Paste a new one in Settings.", ageH)));
+        }
+    }
+
+    private volatile String pendingJob = "";
 
     /** Refresh one needed expiry per call (round robin), or all of them when {@code all}. */
     private void refreshChains(boolean all) throws Exception {
@@ -320,6 +440,7 @@ public final class BotService extends Service {
                             c.expiry, r.delta, r.iv, r.oi, r.ltp, r.bid, r.ask, now);
                 if (engine.spot() <= 0 && c.spot > 0) engine.onSpot(c.spot, now);
                 Set<String> want = engine.wantedContracts(900);
+                lastWanted = want;
                 if (feed != null) feed.setOptions(want);
                 subscribed = want.size();
             });
@@ -355,7 +476,7 @@ public final class BotService extends Service {
             long now = System.currentTimeMillis();
             if (segment == FeedParser.SEG_IDX_I) {
                 if (DhanApi.NIFTY_ID.equals(securityId)) { if (ltp > 0) post(() -> engine.onSpot(ltp, now)); }
-                else if (securityId.equals(vixId)) { if (ltp > 0) post(() -> engine.onVix(ltp)); }
+                else if (securityId.equals(vixId)) { if (ltp > 0) { lastVixTickMillis = now; post(() -> engine.onVix(ltp)); } }
             } else if (segment == FeedParser.SEG_NSE_FNO) {
                 post(() -> engine.onOptionTick(securityId, ltp, bid, ask, now));
             }
@@ -366,6 +487,12 @@ public final class BotService extends Service {
         }
 
         @Override public void onParseError(String message) { warn("Feed: " + message); }
+
+        @Override public void onDepth(int segment, String securityId, double[] bidPx, int[] bidQty, double[] askPx, int[] askQty) {
+            if (segment != FeedParser.SEG_NSE_FNO) return;
+            long now = System.currentTimeMillis();
+            post(() -> engine.onDepth(securityId, bidPx, bidQty, askPx, askQty, now));
+        }
     };
 
     // ------------------------------------------------------------------ engine thread
@@ -378,6 +505,9 @@ public final class BotService extends Service {
                 engine.onTimer(now);
                 engine.setAvailableFunds(liveMode && dhanFunds >= 0 ? dhanFunds : cfg.capital + engine.day().realizedPnl);
                 lastNeeded = new java.util.LinkedHashSet<>(engine.neededExpiries());
+                pendingBarStart = engine.pendingBarStart();
+                pendingJob = engine.jobText();
+                if (now - lastWakeRenew > 30 * 60_000L && wake != null) { wake.acquire(12 * 60 * 60 * 1000L); lastWakeRenew = now; }
                 publish();
                 if (now - lastNotifMillis > 5_000) { lastNotifMillis = now; updateStatusNotification(); }
             } catch (RuntimeException e) {
@@ -511,6 +641,21 @@ public final class BotService extends Service {
         s.dhanFunds = dhanFunds;
         s.lastError = lastError;
         s.startedMillis = startedMillis;
+        long now = System.currentTimeMillis();
+        long made = settings == null ? 0 : settings.tokenMadeMillis();
+        s.tokenAgeHours = made == 0 ? -1 : (now - made) / 3_600_000.0;
+        s.autoRenew = settings != null && settings.autoRenewToken();
+        if (engine != null) { s.barsFixed = engine.barsFixed(); s.waitingForDhanBar = engine.pendingBarStart() > 0; }
+        LocalDate today = LocalDate.now(MarketClock.IST);
+        if (!MarketClock.tradingDay(today)) s.warnings.add("Market closed today (weekend or NSE holiday)");
+        if (MarketClock.holidayListOutdated(today)) s.warnings.add("No NSE holidays known for " + today.getYear() + " — add them in Settings");
+        if (engine != null && !engine.ivGauge().hasVixHistory())
+            s.warnings.add("India VIX history not loaded (VIX ID " + vixId + "?) — IV level uses ATM IV, which is rougher");
+        if (feedConnected && MarketClock.sessionOpen(now) && now - startedMillis > 120_000 && now - lastVixTickMillis > 120_000)
+            s.warnings.add("No live India VIX ticks for 2+ min — check the VIX ID in Settings");
+        if (s.tokenAgeHours >= 20) s.warnings.add(String.format(Locale.US, "Dhan token is %.0f h old (expires at 24 h)%s",
+                s.tokenAgeHours, s.autoRenew && s.tokenAgeHours < 24 ? " — auto-renew will try" : " — paste a new one"));
+        if (tokenExpired) s.warnings.add("Dhan token expired — paste a new one in Settings and tap Save");
         BotHub.set(s);
     }
 

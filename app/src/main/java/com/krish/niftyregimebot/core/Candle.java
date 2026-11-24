@@ -1,9 +1,11 @@
 package com.krish.niftyregimebot.core;
 
-/** One 1-minute bar. startMillis is the minute's start (epoch ms). */
+/** One price bar. startMillis is the bar's start (epoch ms). */
 public final class Candle {
     public final long startMillis;
     public double open, high, low, close;
+    /** When the bot saw this bar's first live tick (0 = bar came from Dhan's history). */
+    public long firstTickMillis;
 
     public Candle(long startMillis, double open, double high, double low, double close) {
         this.startMillis = startMillis;

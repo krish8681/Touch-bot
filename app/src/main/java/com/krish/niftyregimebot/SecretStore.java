@@ -31,7 +31,7 @@ public final class SecretStore {
             byte[] iv = cipher.getIV();
             byte[] enc = cipher.doFinal(value.getBytes(StandardCharsets.UTF_8));
             String packed = Base64.encodeToString(iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(enc, Base64.NO_WRAP);
-            prefs.edit().putString(key, packed).apply();
+            prefs.edit().putString(key, packed).commit();
         } catch (Exception e) {
             throw new IllegalStateException("Could not encrypt secret: " + e.getMessage(), e);
         }

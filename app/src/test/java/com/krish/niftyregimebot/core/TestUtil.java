@@ -9,6 +9,13 @@ import java.util.List;
 final class TestUtil {
     private TestUtil() {}
 
+    /** Config for engine-flow tests: decide on own bars at once (no wait for Dhan's copy). */
+    static Config cfg() {
+        Config c = new Config();
+        c.dhanBarWaitMillis = 0;
+        return c;
+    }
+
     static long ist(String localDateTime) {
         return LocalDateTime.parse(localDateTime).atZone(MarketClock.IST).toInstant().toEpochMilli();
     }

@@ -58,9 +58,14 @@ public final class Config {
     public int minDaysToExpiryIntraday = 1;   // never trade a contract on its expiry day
     public int minDaysToExpiryWeekly = 3;     // weekly entries use an expiry ≥ 3 calendar days away
 
+    // ---- bar data
+    public long dhanBarWaitMillis = 60_000;   // after a bar closes, wait this long for Dhan's own copy of it
+    public long partialBarMillis = 30_000;    // own bar whose first tick came later than this is incomplete
+
     // ---- paper fills
     public double paperSlippage = 0.5;        // ₹ per unit per leg
     public double limitBuffer = 1.0;          // ₹ added to ask (buy) / taken from bid (sell)
+    public long depthMaxAgeMillis = 10_000;   // paper fills use market depth only if it is this fresh
 
     public int maxLotsByFreeze() { return Math.max(1, freezeQty / Math.max(1, lotSize)); }
 

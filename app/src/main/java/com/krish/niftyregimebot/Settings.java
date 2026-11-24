@@ -25,7 +25,27 @@ public final class Settings {
 
     public void saveCredentials(String clientId, String token) {
         p.edit().putString("client_id", clientId.trim()).apply();
-        if (token != null && !token.trim().isEmpty()) secrets.put(K_TOKEN, token.trim());
+        if (token != null && !token.trim().isEmpty()) saveToken(token, System.currentTimeMillis());
+    }
+
+    /** Save a Dhan token and when it was made (Dhan tokens last 24 hours). commit() so a renewed token is never lost. */
+    public void saveToken(String token, long madeMillis) {
+        secrets.put(K_TOKEN, token.trim());
+        p.edit().putLong("token_made", madeMillis).commit();
+    }
+
+    /** When the current token was pasted or renewed (0 = unknown). */
+    public long tokenMadeMillis() { return p.getLong("token_made", 0L); }
+
+    public boolean autoRenewToken() { return p.getBoolean("auto_renew_token", true); }
+
+    /** Extra NSE holidays the user typed (yyyy-MM-dd, comma separated), e.g. next year's list. */
+    public String extraHolidays() { return p.getString("extra_holidays", ""); }
+    public void saveExtraHolidays(String s) { p.edit().putString("extra_holidays", s.trim()).apply(); }
+    public java.util.List<String> extraHolidayList() {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (String x : extraHolidays().split("[,\\s]+")) if (!x.trim().isEmpty()) out.add(x.trim());
+        return out;
     }
 
     public void saveTelegram(String botToken, String chat) {

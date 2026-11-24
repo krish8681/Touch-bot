@@ -19,6 +19,8 @@ public final class FeedParser {
         void onPrice(int segment, String securityId, double ltp, double bid, double ask, double oi);
         void onDisconnect(int reasonCode);
         void onParseError(String message);
+        /** Five depth levels, best first (full packets only). */
+        default void onDepth(int segment, String securityId, double[] bidPx, int[] bidQty, double[] askPx, int[] askQty) {}
     }
 
     static int fixedSize(int code) {
@@ -69,6 +71,17 @@ public final class FeedParser {
                     double bid = b.getFloat(d + 12);
                     double ask = b.getFloat(d + 16);
                     h.onPrice(seg, sid, ltp, bid, ask, oi);
+                    // depth level (20 bytes): bidQty int, askQty int, bidOrders short, askOrders short, bidPx float, askPx float
+                    double[] bp = new double[5], ap = new double[5];
+                    int[] bq = new int[5], aq = new int[5];
+                    for (int i = 0; i < 5; i++) {
+                        int at = d + i * 20;
+                        bq[i] = b.getInt(at);
+                        aq[i] = b.getInt(at + 4);
+                        bp[i] = b.getFloat(at + 12);
+                        ap[i] = b.getFloat(at + 16);
+                    }
+                    h.onDepth(seg, sid, bp, bq, ap, aq);
                     break;
                 }
                 case DISCONNECT:

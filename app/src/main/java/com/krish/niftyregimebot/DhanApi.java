@@ -203,6 +203,27 @@ public final class DhanApi {
 
     public String clientId() { return clientId; }
 
+    /** Result of {@link #renewToken()}. expiryTime is Dhan's text (IST), may be empty. */
+    public static final class Renewed { public String accessToken = "", expiryTime = ""; }
+
+    /**
+     * GET /v2/RenewToken: swaps the current (still valid, Dhan-Web generated) token for a new one
+     * valid 24 hours. The OLD token stops working at once, so the caller must save the new one.
+     */
+    public Renewed renewToken() throws IOException {
+        Request r = base("/RenewToken", false).header("dhanClientId", clientId).get().build();
+        Object o = exec(r);
+        Map<String, Object> m = o instanceof Map ? Json.obj(o) : new LinkedHashMap<>();
+        Renewed out = new Renewed();
+        Object t = m.get("accessToken");
+        if (t == null) t = m.get("token");
+        if (t == null) for (Object v : m.values()) if (v instanceof String && ((String) v).startsWith("eyJ") && ((String) v).length() > 60) t = v;
+        out.accessToken = t == null ? "" : String.valueOf(t);
+        Object e = m.get("expiryTime");
+        out.expiryTime = e == null ? "" : String.valueOf(e);
+        return out;
+    }
+
     // ------------------------------------------------------------ plumbing
 
     private Request.Builder base(String path, boolean needsClientId) {

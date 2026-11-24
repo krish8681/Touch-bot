@@ -40,9 +40,27 @@ It runs fully on the phone. No PC or server is needed.
 - Open positions are saved, so a WEEKLY trade survives a phone restart.
 - Every minute in live mode the bot checks Dhan's positions and warns if they do not match.
 
+## Data handling (v1.1)
+
+- **Bars match Dhan's chart.** After each bar closes the bot fetches Dhan's own copy and uses it.
+  Every 10 minutes it also repairs any bar that was wrong or missing (feed gaps).
+  If Dhan's copy does not come within a minute and the bot's own bar is incomplete
+  (it missed the bar's start), it makes no new entry and no trend exit on that bar.
+- **Paper fills use market depth.** A paper order only takes the quantity shown in the 5-level
+  order book within its limit, at worse prices as it goes deeper. Big orders can fill in parts.
+- **Dhan token.** The bot shows the token's age. Between 20 and 24 hours it renews the token by itself
+  (Dhan's RenewToken, for tokens made on Dhan Web). If that fails you get an alert.
+  You can paste a new token in Settings while the bot runs; it reconnects without a restart.
+- **Morning check.** Around 09:00 on trading days, if a position is saved but the bot is not running,
+  you get an alert. The phone is kept awake for the whole session (renewed every 30 minutes).
+- **NSE holidays.** All 2026 holidays are built in (24 Nov 2026 is one). WEEKLY exits on the last
+  trading day before expiry. Add next year's dates in Settings.
+- **India VIX check.** Home shows a warning if VIX history or live VIX ticks are missing.
+- Paper mode no longer polls Dhan's positions and funds every minute.
+
 ## How to use
 
-1. Install `NiftyRegimeBot-v1.0-release.apk`.
+1. Install `NiftyRegimeBot-v1.1-release.apk`.
 2. Settings → paste Dhan **Client ID** and **access token**. Check the lot size (65) and tick the box.
 3. Choose INTRADAY or WEEKLY. Set your max loss per trade. Save.
 4. Settings → Battery → set the app to **Unrestricted**.

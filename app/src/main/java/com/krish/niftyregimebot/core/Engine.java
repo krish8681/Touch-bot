@@ -112,6 +112,9 @@ public final class Engine implements CandleAggregator.Sink {
     private final Set<String> acknowledgedIds = new java.util.HashSet<>();
     private final Set<String> lastStrangerIds = new java.util.HashSet<>();
     private String entryRegimeText = "", entryIvText = "";
+    private Candle pendingBar;                 // closed from our own ticks, waiting for Dhan's copy
+    private long pendingSince;
+    private int barsFixed;                     // bars corrected or filled in from Dhan's data
 
     public Engine(Config cfg, Charges charges, Broker broker, Listener out) {
         this.cfg = cfg;
@@ -146,6 +149,9 @@ public final class Engine implements CandleAggregator.Sink {
     public List<Candle> bars() { return bars; }
     public IvGauge ivGauge() { return ivGauge; }
     public Config config() { return cfg; }
+    /** Start time of the closed bar we are waiting to confirm with Dhan's data, or 0. */
+    public long pendingBarStart() { return pendingBar == null ? 0 : pendingBar.startMillis; }
+    public int barsFixed() { return barsFixed; }
 
     /** Expiries whose option chain must be kept fresh (trading expiry + open position's). */
     public Set<String> neededExpiries() {
@@ -266,6 +272,13 @@ public final class Engine implements CandleAggregator.Sink {
         q.updatedMillis = now;
     }
 
+    /** Market depth (5 levels) for an option, from the live feed's full packet. */
+    public void onDepth(String securityId, double[] bidPx, int[] bidQty, double[] askPx, int[] askQty, long now) {
+        OptionQuote q = quotes.get(securityId);
+        if (q == null) return;
+        q.setDepth(bidPx, bidQty, askPx, askQty, now);
+    }
+
     /** Compare with the real Dhan account (live mode blocks entries on surprises). */
     public void reconcile(List<BrokerPosition> brokerPositions) {
         Set<String> ours = new java.util.HashSet<>();
@@ -311,6 +324,11 @@ public final class Engine implements CandleAggregator.Sink {
         nowMillis = now;
         rollDayIfNeeded(now);
         agg.closeIfDue(now);
+        if (pendingBar != null && now - pendingSince >= cfg.dhanBarWaitMillis) {
+            Candle c = pendingBar;
+            pendingBar = null;
+            decide(c, false);
+        }
         stepJob(now);
         if (job == null && emergencyRequested) {
             if (position != null) startExit(ExitReason.EMERGENCY);
@@ -321,10 +339,78 @@ public final class Engine implements CandleAggregator.Sink {
 
     // ------------------------------------------------------------------ bars → decisions
 
+    /** A bar built from our own ticks just closed. Wait briefly for Dhan's official copy. */
     @Override public void onBarClosed(Candle c) {
-        bars.add(c);
+        if (pendingBar != null) { Candle old = pendingBar; pendingBar = null; decide(old, false); }
+        if (cfg.dhanBarWaitMillis <= 0) { decide(c, false); return; }
+        pendingBar = c;
+        pendingSince = nowMillis;
+    }
+
+    /** Our own bar is incomplete if we missed its start (bot started late, feed gap). */
+    private boolean incomplete(Candle c) {
+        return c.firstTickMillis > 0 && c.firstTickMillis - c.startMillis > cfg.partialBarMillis;
+    }
+
+    /**
+     * Recent bars from Dhan's chart API (same timeframe, oldest first, still-forming bar excluded).
+     * Corrects bars we built from ticks, fills bars we missed, and completes the pending decision.
+     */
+    public void onDhanBars(List<Candle> official) {
+        if (official == null || official.isEmpty()) return;
+        long currentBucket = agg.current() == null ? Long.MAX_VALUE : agg.current().startMillis;
+        int fixed = 0;
+        Candle pendingOfficial = null;
+        boolean misaligned = false;
+        for (Candle o : official) {
+            if (agg.bucketStart(o.startMillis) != o.startMillis) { misaligned = true; continue; }
+            if (o.startMillis >= currentBucket) continue;
+            if (pendingBar != null && o.startMillis == pendingBar.startMillis) { pendingOfficial = o; continue; }
+            if (!bars.isEmpty() && o.startMillis < bars.get(0).startMillis) continue;
+            int i = indexOfBar(o.startMillis);
+            if (i >= 0) {
+                Candle b = bars.get(i);
+                if (differs(b, o)) { bars.set(i, o); fixed++; }
+            } else {
+                int at = bars.size();
+                while (at > 0 && bars.get(at - 1).startMillis > o.startMillis) at--;
+                bars.add(at, o);
+                fixed++;
+            }
+        }
+        if (misaligned && barsFixed == 0 && fixed == 0) log("WARN", "Dhan's bars are not aligned to 09:15 — using the bot's own bars");
+        if (fixed > 0) {
+            barsFixed += fixed;
+            log("INFO", "Corrected " + fixed + " bar(s) using Dhan's chart data");
+            lastReading = regime.replay(bars);
+        }
+        if (pendingOfficial != null) {
+            pendingBar = null;
+            decide(pendingOfficial, true);
+        }
+    }
+
+    private int indexOfBar(long start) {
+        for (int i = bars.size() - 1; i >= 0; i--) {
+            long s = bars.get(i).startMillis;
+            if (s == start) return i;
+            if (s < start) return -1;
+        }
+        return -1;
+    }
+
+    private static boolean differs(Candle a, Candle b) {
+        return Math.abs(a.open - b.open) > 0.01 || Math.abs(a.high - b.high) > 0.01
+                || Math.abs(a.low - b.low) > 0.01 || Math.abs(a.close - b.close) > 0.01;
+    }
+
+    /** Add the closed bar and make the decision. {@code official} = Dhan's copy, else our own ticks. */
+    private void decide(Candle c, boolean official) {
+        boolean partial = !official && incomplete(c);
+        int existing = indexOfBar(c.startMillis);
+        if (existing >= 0) bars.set(existing, c); else bars.add(c);
         if (bars.size() > 600) bars.remove(0);
-        lastReading = regime.evaluate(bars);
+        lastReading = existing >= 0 ? regime.replay(bars) : regime.evaluate(bars);
         Decision d = new Decision();
         d.timeMillis = nowMillis == 0 ? c.startMillis : nowMillis;
         d.regime = lastReading;
@@ -332,6 +418,12 @@ public final class Engine implements CandleAggregator.Sink {
         d.pick = StrategyGrid.pick(lastReading.confirmed, d.iv.level);
         lastDecision = d;
 
+        if (partial) {
+            d.action = "bar data incomplete (missed its start, Dhan's copy did not arrive) — no new entry or trend exit on this bar"
+                    + (position != null ? "; target/stop/time exits still active" : "");
+            out.onDecision(d);
+            return;
+        }
         if (position != null) {
             d.action = "holding " + position.type.title;
             if (StrategyGrid.regimeAgainst(position.type, lastReading.confirmed, lastReading.adx, cfg) && job == null) {
@@ -387,7 +479,7 @@ public final class Engine implements CandleAggregator.Sink {
     /** Null if entries are allowed now, else the reason. */
     String entryBlock() {
         int m = MarketClock.minuteOfDay(nowMillis);
-        if (!MarketClock.weekday(MarketClock.date(nowMillis))) return "weekend";
+        if (!MarketClock.tradingDay(MarketClock.date(nowMillis))) return "market closed today (weekend or NSE holiday)";
         if (m < cfg.entryStart || m > cfg.entryEnd) return "outside entry window";
         if (nowMillis - lastSpotMillis > 10_000) return "NIFTY price is stale";
         if (day.entries >= cfg.maxTradesPerDay) return "max trades for today reached";
@@ -432,7 +524,7 @@ public final class Engine implements CandleAggregator.Sink {
         if (position.openPnl <= -position.stopRs && position.stopRs > 0) return ExitReason.STOP;
         int m = MarketClock.minuteOfDay(now);
         if (position.holding == Config.Holding.INTRADAY) {
-            if (m >= cfg.squareOff && MarketClock.weekday(MarketClock.date(now))) return ExitReason.TIME;
+            if (m >= cfg.squareOff && MarketClock.tradingDay(MarketClock.date(now))) return ExitReason.TIME;
             if (MarketClock.date(now).isAfter(MarketClock.date(position.entryMillis))) return ExitReason.TIME;
         } else if (MarketClock.weeklyExitDue(position.expiry, now, cfg.squareOff)) {
             return ExitReason.EXPIRY_NEAR;

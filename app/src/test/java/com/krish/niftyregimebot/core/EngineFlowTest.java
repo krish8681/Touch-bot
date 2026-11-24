@@ -29,13 +29,13 @@ public class EngineFlowTest {
 
     static final String EXP = "2026-12-01";
 
-    /** Engine primed with history, VIX, chain; ready to trade at 10:00 on Tue 24 Nov 2026. */
+    /** Engine primed with history, VIX, chain; ready to trade at 10:00 on Wed 25 Nov 2026. */
     static Engine engine(Config c, Rec rec, double vixNow, double step, double spotEnd) {
         Engine[] holder = new Engine[1];
         PaperBroker paper = new PaperBroker(id -> holder[0].quote(id), c.paperSlippage);
         Engine e = new Engine(c, new Charges(), paper, rec);
         holder[0] = e;
-        long t0 = TestUtil.ist("2026-11-24T10:00");
+        long t0 = TestUtil.ist("2026-11-25T10:00");
         e.onTimer(t0);
         List<Double> vix = new ArrayList<>();
         for (int i = 0; i < 250; i++) vix.add(10 + (i % 100) / 10.0);
@@ -52,14 +52,14 @@ public class EngineFlowTest {
 
     /** Feed ticks so the 10:00 bar closes at 10:05 and the engine decides. */
     static long closeBar(Engine e, double spot) {
-        long t = TestUtil.ist("2026-11-24T10:00");
+        long t = TestUtil.ist("2026-11-25T10:00");
         e.onSpot(spot, t + 1_000);
         e.onSpot(spot, t + 5 * 60_000 + 500);     // first tick of the next bar closes 10:00 bar
         return t + 5 * 60_000 + 500;
     }
 
     @Test public void uptrendLowIvOpensBullCallSpreadAndHitsTarget() {
-        Config c = new Config();
+        Config c = TestUtil.cfg();
         Rec rec = new Rec();
         Engine e = engine(c, rec, 11, 6, 26000);
         assertEquals(RegimeDetector.Regime.UP, e.lastReading().confirmed);
@@ -92,7 +92,7 @@ public class EngineFlowTest {
     }
 
     @Test public void highIvSidewaysOpensIronCondorAndStopsOut() {
-        Config c = new Config();
+        Config c = TestUtil.cfg();
         c.riskPerTrade = 20_000;
         Rec rec = new Rec();
         Engine e = engine(c, rec, 19, 0, 26000);
@@ -120,11 +120,11 @@ public class EngineFlowTest {
     }
 
     @Test public void missingLegPriceUnwindsTheFilledLeg() {
-        Config c = new Config();
+        Config c = TestUtil.cfg();
         Rec rec = new Rec();
         Engine e = engine(c, rec, 11, 6, 26000);
         // Kill the book on the 26200 CE so the second leg cannot be priced.
-        long t0 = TestUtil.ist("2026-11-24T10:00");
+        long t0 = TestUtil.ist("2026-11-25T10:00");
         e.quote(TestUtil.id(OptionQuote.Right.CE, 26200)).bid = 0;
         e.quote(TestUtil.id(OptionQuote.Right.CE, 26200)).ask = 0;
         long t = closeBar(e, 26000);
@@ -154,13 +154,13 @@ public class EngineFlowTest {
     }
 
     @Test public void intradaySquareOffAt1515() {
-        Config c = new Config();
+        Config c = TestUtil.cfg();
         Rec rec = new Rec();
         Engine e = engine(c, rec, 11, 6, 26000);
         long t = closeBar(e, 26000);
         for (int i = 0; i < 5; i++) e.onTimer(t + i * 1000);
         assertNotNull(e.position());
-        long late = TestUtil.ist("2026-11-24T15:15") + 2_000;
+        long late = TestUtil.ist("2026-11-25T15:15") + 2_000;
         TestUtil.reprice(e, 26010, late);
         e.onSpot(26010, late);
         for (int i = 0; i < 6; i++) e.onTimer(late + i * 1000);
@@ -169,7 +169,7 @@ public class EngineFlowTest {
     }
 
     @Test public void noEntryOutsideWindowOrAfterLimits() {
-        Config c = new Config();
+        Config c = TestUtil.cfg();
         Rec rec = new Rec();
         Engine e = engine(c, rec, 11, 6, 26000);
         e.day().realizedPnl = -c.dailyLossLimit;
@@ -179,7 +179,7 @@ public class EngineFlowTest {
     }
 
     @Test public void emergencyExitClosesEverything() {
-        Config c = new Config();
+        Config c = TestUtil.cfg();
         Rec rec = new Rec();
         Engine e = engine(c, rec, 11, 6, 26000);
         long t = closeBar(e, 26000);
@@ -193,7 +193,7 @@ public class EngineFlowTest {
     }
 
     @Test public void restoredWeeklyPositionIsManaged() {
-        Config c = new Config();
+        Config c = TestUtil.cfg();
         c.holding = Config.Holding.WEEKLY;
         Rec rec = new Rec();
         Engine e = engine(c, rec, 11, 6, 26000);
@@ -233,13 +233,13 @@ public class EngineFlowTest {
     }
 
     @Test public void rejectedSecondLegUnwindsFirstLeg() {
-        Config c = new Config();
+        Config c = TestUtil.cfg();
         Rec rec = new Rec();
         Engine[] h = new Engine[1];
         RejectSells broker = new RejectSells(new PaperBroker(id -> h[0].quote(id), c.paperSlippage));
         Engine e = new Engine(c, new Charges(), broker, rec);
         h[0] = e;
-        long t0 = TestUtil.ist("2026-11-24T10:00");
+        long t0 = TestUtil.ist("2026-11-25T10:00");
         e.onTimer(t0);
         List<Double> vix = new ArrayList<>();
         for (int i = 0; i < 250; i++) vix.add(10 + (i % 100) / 10.0);

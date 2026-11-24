@@ -41,7 +41,7 @@ public final class CandleAggregator {
             current = null;
             sink.onBarClosed(done);
         }
-        if (current == null) current = new Candle(b, price, price, price, price);
+        if (current == null) { current = new Candle(b, price, price, price, price); current.firstTickMillis = now; }
         else if (b == current.startMillis) {
             current.high = Math.max(current.high, price);
             current.low = Math.min(current.low, price);

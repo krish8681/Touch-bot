@@ -48,6 +48,11 @@ public final class BotHub {
         public String job = "";
         public String lastError = "";
         public long startedMillis;
+        public double tokenAgeHours = -1;
+        public boolean autoRenew;
+        public int barsFixed;
+        public boolean waitingForDhanBar;
+        public final List<String> warnings = new ArrayList<>();
     }
 
     private static Snapshot snap = new Snapshot();

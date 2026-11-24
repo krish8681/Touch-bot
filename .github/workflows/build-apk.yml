@@ -1,0 +1,56 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Show Android SDK (preinstalled on GitHub runners)
+        run: echo "ANDROID_HOME=$ANDROID_HOME" && ls "$ANDROID_HOME/platforms" | tail -3
+
+      - name: Make gradlew runnable
+        run: chmod +x gradlew
+
+      - name: Unit tests (strategy math, engine flow)
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Build APK
+        run: ./gradlew --no-daemon assembleRelease
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: NiftyRegimeBot-APK
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: test-reports
+          path: app/build/reports/tests/
+
+      - name: Publish APK as a download (GitHub release)
+        if: github.ref == 'refs/heads/nifty-regime-bot'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(grep -oP 'def appVersion = "\K[^"]+' app/build.gradle)
+          TAG="nifty-regime-bot-v$VER"
+          gh release delete "$TAG" -y --cleanup-tag || true
+          gh release create "$TAG" app/build/outputs/apk/release/*.apk \
+            --target "$GITHUB_SHA" --prerelease \
+            --title "Nifty Regime Bot v$VER" \
+            --notes "Paper mode by default; live switch in Settings (needs a Dhan-registered static IP). File: NiftyRegimeBot-v$VER-release.apk. Built from $GITHUB_SHA."

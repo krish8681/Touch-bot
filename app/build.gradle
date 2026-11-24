@@ -1,0 +1,57 @@
+plugins {
+    id 'com.android.application'
+}
+
+def appVersion = "1.0"
+
+android {
+    namespace 'com.krish.niftyregimebot'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.krish.niftyregimebot"
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName appVersion
+        // Shown on the phone: the version is part of the app name.
+        resValue "string", "app_name", "Nifty Regime Bot v" + appVersion
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            // Signed with the debug key so the APK installs directly (sideload).
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    applicationVariants.all { variant ->
+        variant.outputs.all {
+            outputFileName = "NiftyRegimeBot-v${appVersion}-${variant.buildType.name}.apk"
+        }
+    }
+
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    testImplementation 'junit:junit:4.13.2'
+}

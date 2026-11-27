@@ -215,7 +215,7 @@ public final class DhanApi {
         body.put("strike", offset == 0 ? "ATM" : offset > 0 ? "ATM+" + offset : "ATM" + offset);
         body.put("drvOptionType", call ? "CALL" : "PUT");
         List<Object> req = new ArrayList<>();
-        req.add("open"); req.add("close"); req.add("iv"); req.add("strike"); req.add("spot");
+        req.add("open"); req.add("close"); req.add("iv"); req.add("oi"); req.add("strike"); req.add("spot");
         body.put("requiredData", req);
         body.put("fromDate", from.toString());
         body.put("toDate", to.toString());
@@ -226,7 +226,7 @@ public final class DhanApi {
         if (!(side instanceof Map)) return out;
         Map<String, Object> s = Json.obj(side);
         List<Object> t = Json.arr(s.get("timestamp")), o = Json.arr(s.get("open")), c = Json.arr(s.get("close")),
-                iv = Json.arr(s.get("iv")), k = Json.arr(s.get("strike"));
+                iv = Json.arr(s.get("iv")), k = Json.arr(s.get("strike")), oiL = Json.arr(s.get("oi"));
         int n = Math.min(Math.min(t.size(), o.size()), Math.min(c.size(), k.size()));
         com.krish.niftyregimebot.core.OptionQuote.Right right = call ? com.krish.niftyregimebot.core.OptionQuote.Right.CE
                 : com.krish.niftyregimebot.core.OptionQuote.Right.PE;
@@ -237,8 +237,9 @@ public final class DhanApi {
             double op = o.get(i) instanceof Number ? ((Number) o.get(i)).doubleValue() : 0;
             double cl = c.get(i) instanceof Number ? ((Number) c.get(i)).doubleValue() : 0;
             double v = i < iv.size() && iv.get(i) instanceof Number ? ((Number) iv.get(i)).doubleValue() : 0;
+            double oi = i < oiL.size() && oiL.get(i) instanceof Number ? ((Number) oiL.get(i)).doubleValue() : 0;
             if (strike <= 0 || cl <= 0) continue;
-            out.add(new com.krish.niftyregimebot.core.Backtester.OptBar(ms, expiryCode, right, strike, op > 0 ? op : cl, cl, v));
+            out.add(new com.krish.niftyregimebot.core.Backtester.OptBar(ms, expiryCode, right, strike, op > 0 ? op : cl, cl, v, oi));
         }
         return out;
     }

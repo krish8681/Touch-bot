@@ -29,6 +29,7 @@ import com.krish.niftyregimebot.core.MarketClock;
 import com.krish.niftyregimebot.core.OptionQuote;
 import com.krish.niftyregimebot.core.PaperBroker;
 import com.krish.niftyregimebot.core.Position;
+import com.krish.niftyregimebot.core.RegimeDetector;
 import com.krish.niftyregimebot.core.TradeRecord;
 
 import java.io.IOException;
@@ -167,6 +168,7 @@ public final class BotService extends Service {
         journal = new Journal(this);
         cfg = settings.config();
         MarketClock.setExtraHolidays(settings.extraHolidayList());
+        MarketClock.setExtraEvents(settings.extraEventList());
         liveMode = settings.live();
         vixId = settings.vixId();
         http = new OkHttpClient();
@@ -405,6 +407,7 @@ public final class BotService extends Service {
                 return;
             }
             settings.saveToken(r.accessToken, now);
+            settings.markRenewed(now);
             String id = settings.clientId();
             api = new DhanApi(http, id, r.accessToken);
             if (liveMode) liveRef.target = new DhanLiveBroker(api, cfg.holding == Config.Holding.WEEKLY);
@@ -657,7 +660,32 @@ public final class BotService extends Service {
         if (s.tokenAgeHours >= 20) s.warnings.add(String.format(Locale.US, "Dhan token is %.0f h old (expires at 24 h)%s",
                 s.tokenAgeHours, s.autoRenew && s.tokenAgeHours < 24 ? " — auto-renew will try" : " — paste a new one"));
         if (tokenExpired) s.warnings.add("Dhan token expired — paste a new one in Settings and tap Save");
+        selfTest(s, now);
         BotHub.set(s);
+    }
+
+    /** Startup self-test lines for Home: ✓ ok, ✗ problem, … not known yet. */
+    private void selfTest(BotHub.Snapshot s, long now) {
+        if (engine == null) return;
+        boolean open = MarketClock.sessionOpen(now);
+        boolean waited = now - startedMillis > 90_000;
+        s.checks.add((dhanFunds >= 0 ? "✓" : lastError.isEmpty() ? "…" : "✗") + " Dhan login");
+        RegimeDetector rd = new RegimeDetector(cfg);
+        s.checks.add((engine.bars().size() >= rd.minBars() ? "✓" : "…") + " NIFTY bars (" + engine.bars().size() + ")");
+        s.checks.add((engine.ivGauge().hasVixHistory() ? "✓" : waited ? "✗" : "…") + " India VIX history (ID " + vixId + ")");
+        String vixLive = lastVixTickMillis > 0 && now - lastVixTickMillis < 120_000 ? "✓" : !open ? "–" : waited ? "✗" : "…";
+        s.checks.add(vixLive + " Live India VIX" + (open ? "" : " (market closed)"));
+        int depth = 0, priced = 0;
+        for (OptionQuote q : engine.quotes()) {
+            if (now - q.updatedMillis < 30_000) priced++;
+            if (q.depthMillis > 0 && now - q.depthMillis < 60_000) depth++;
+        }
+        s.checks.add((priced > 0 ? "✓" : waited ? "✗" : "…") + " Option prices (" + priced + " live)");
+        s.checks.add((depth > 0 ? "✓" : !open ? "–" : waited ? "✗" : "…") + " Order book depth (" + depth + ")" + (open ? "" : " (market closed)"));
+        long renewed = settings.lastRenewMillis();
+        s.checks.add((renewed > 0 ? "✓ Token auto-renew worked (" + HM.format(Instant.ofEpochMilli(renewed)) + ")"
+                : settings.autoRenewToken() ? "… Token auto-renew not tried yet (runs at 20 h)" : "– Token auto-renew is off"));
+        s.checks.add((engine.pcr() > 0 ? String.format(Locale.US, "✓ Open interest (PCR %.2f)", engine.pcr()) : "… Open interest not seen yet"));
     }
 
     // ------------------------------------------------------------------ notifications

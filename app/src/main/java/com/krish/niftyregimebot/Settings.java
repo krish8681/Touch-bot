@@ -37,9 +37,21 @@ public final class Settings {
     /** When the current token was pasted or renewed (0 = unknown). */
     public long tokenMadeMillis() { return p.getLong("token_made", 0L); }
 
+    /** Extra event days (RBI policy, Budget, elections…), yyyy-MM-dd comma separated. */
+    public String extraEvents() { return p.getString("extra_events", ""); }
+    public void saveExtraEvents(String s) { p.edit().putString("extra_events", s.trim()).apply(); }
+    public java.util.List<String> extraEventList() {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (String x : extraEvents().split("[,\\s]+")) if (!x.trim().isEmpty()) out.add(x.trim());
+        return out;
+    }
+
     public String lastBacktest() { return p.getString("last_backtest", ""); }
     public void saveLastBacktest(String text) { p.edit().putString("last_backtest", text).apply(); }
     public boolean intradayButterfly() { return p.getBoolean("intraday_butterfly", false); }
+
+    public long lastRenewMillis() { return p.getLong("last_renew", 0L); }
+    public void markRenewed(long t) { p.edit().putLong("last_renew", t).apply(); }
 
     public boolean autoRenewToken() { return p.getBoolean("auto_renew_token", true); }
 
@@ -75,6 +87,12 @@ public final class Settings {
         c.holding = weekly() ? Config.Holding.WEEKLY : Config.Holding.INTRADAY;
         c.minTargetToCharges = d("min_target_x_charges", c.minTargetToCharges);
         c.intradayButterfly = intradayButterfly();
+        c.confirm15m = p.getBoolean("f_confirm15m", c.confirm15m);
+        c.chopFilter = p.getBoolean("f_chop", c.chopFilter);
+        c.pcrFilter = p.getBoolean("f_pcr", c.pcrFilter);
+        c.eventFilter = p.getBoolean("f_event", c.eventFilter);
+        c.gapCheck = p.getBoolean("f_gap", c.gapCheck);
+        c.reenterAfterFlip = p.getBoolean("f_reenter", c.reenterAfterFlip);
         return c;
     }
 

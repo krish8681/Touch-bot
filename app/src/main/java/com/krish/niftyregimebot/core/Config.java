@@ -58,6 +58,21 @@ public final class Config {
     public int minDaysToExpiryIntraday = 1;   // never trade a contract on its expiry day
     public int minDaysToExpiryWeekly = 3;     // weekly entries use an expiry ≥ 3 calendar days away
 
+    // ---- v1.3 entry filters and guards (each can be switched off in Settings)
+    public boolean confirm15m = true;         // INTRADAY: 15-min trend must agree with the 5-min trend
+    public boolean chopFilter = true;         // no trend entry while ADX is falling or the day's range is tiny
+    public int adxFallBars = 3;               // ADX now lower than this many bars ago = falling
+    public double minDayRangePct = 0.0025;    // day's high-low so far must be ≥ 0.25% of NIFTY
+    public boolean pcrFilter = false;         // bullish entry needs put OI not shrinking vs calls (and the reverse)
+    public double pcrMaxChange = 0.10;        // PCR moved more than 10% against the trade since 09:30 → skip
+    public double pcrBandPts = 500;           // strikes within ±500 of NIFTY count for PCR
+    public boolean eventFilter = true;        // no entries on RBI policy / Budget days; WEEKLY exits the day before
+    public double cooldownAfterWinMinutes = 3; // shorter wait after a winning trade
+    public boolean reenterAfterFlip = true;   // after a trend-flip exit, a new trade with the new trend may start at once
+    public double entryMaxSpotMove = 25;      // NIFTY moving more than this while legging in → undo the entry
+    public boolean gapCheck = true;           // WEEKLY: exit at the open if NIFTY gaps against the trade
+    public double gapExitPct = 0.008;         // gap of 0.8% or more
+
     // ---- v1.2
     public double wideGapPct = 0.05;          // leg bid-ask gap above 5% of mid → stop check uses mid
     public double hardStopPctOfMaxLoss = 0.80; // close-now loss beyond 80% of max loss always stops

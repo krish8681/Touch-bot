@@ -32,11 +32,15 @@ public final class Backtester {
         public final long t;            // bar start, epoch ms
         public final int expiryCode;    // 1 = near weekly, 2 = next weekly
         public final OptionQuote.Right right;
-        public final double strike, open, close, iv;
+        public final double strike, open, close, iv, oi;
 
         public OptBar(long t, int expiryCode, OptionQuote.Right right, double strike, double open, double close, double iv) {
+            this(t, expiryCode, right, strike, open, close, iv, 0);
+        }
+
+        public OptBar(long t, int expiryCode, OptionQuote.Right right, double strike, double open, double close, double iv, double oi) {
             this.t = t; this.expiryCode = expiryCode; this.right = right; this.strike = strike;
-            this.open = open; this.close = close; this.iv = iv;
+            this.open = open; this.close = close; this.iv = iv; this.oi = oi;
         }
     }
 
@@ -218,7 +222,7 @@ public final class Backtester {
         double bid = Math.max(0.05, price - half), ask = price + half;
         double iv = o.iv;
         double delta = delta(o.right, spot, o.strike, iv, yearsTo(expiry, now));
-        e.upsertContract(id, o.right, o.strike, expiry, delta, iv, 0, price, bid, ask, now);
+        e.upsertContract(id, o.right, o.strike, expiry, delta, iv, o.oi, price, bid, ask, now);
     }
 
     /** Held legs whose strike left Dhan's window still need a price: intrinsic + ₹0.5. */

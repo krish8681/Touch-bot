@@ -53,6 +53,7 @@ public final class BotHub {
         public int barsFixed;
         public boolean waitingForDhanBar;
         public final List<String> warnings = new ArrayList<>();
+        public final List<String> checks = new ArrayList<>();
     }
 
     private static Snapshot snap = new Snapshot();

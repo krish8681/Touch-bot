@@ -40,6 +40,19 @@ It runs fully on the phone. No PC or server is needed.
 - Open positions are saved, so a WEEKLY trade survives a phone restart.
 - Every minute in live mode the bot checks Dhan's positions and warns if they do not match.
 
+## What's new in v1.3 (each can be switched off in Settings → Entry filters)
+
+- **15-min trend check** (INTRADAY): the 15-minute trend must agree with the 5-minute trend.
+- **Chop filter**: no trend trade while ADX is falling, or when the day's range is under 0.25% of NIFTY.
+- **Open-interest check** (off by default): skip a bullish trade if the put-call ratio fell over 10% since 09:30, and the reverse.
+- **Event days**: no entries on RBI policy / Budget days (2026-27 built in; add more in Settings).
+  WEEKLY skips trades with an event before expiry and closes at 15:15 the trading day before an event.
+- **Cool-down**: 3 minutes after a win, 10 after a loss, none after a trend-flip exit (new trend may trade at once).
+- **Legging guard**: if NIFTY moves more than 25 points while legs are being placed, the entry is undone.
+- **Gap check** (WEEKLY): exit at the open if NIFTY gaps 0.8% or more against the trade.
+- **Self-test on Home**: Dhan login, bars, VIX history, live VIX, option prices, order-book depth, token renew, open interest.
+- The Test tab shows which filters were on, and now loads open interest too.
+
 ## What's new in v1.2
 
 - **Test tab (backtest).** Runs the bot's own rules over the last 30/60/90 days of NIFTY and option
@@ -73,7 +86,7 @@ It runs fully on the phone. No PC or server is needed.
 
 ## How to use
 
-1. Install `NiftyRegimeBot-v1.2-release.apk`.
+1. Install `NiftyRegimeBot-v1.3-release.apk`.
 2. Settings → paste Dhan **Client ID** and **access token**. Check the lot size (65) and tick the box.
 3. Choose INTRADAY or WEEKLY. Set your max loss per trade. Save.
 4. Settings → Battery → set the app to **Unrestricted**.

@@ -71,6 +71,7 @@ public final class BacktestRunner {
         Settings s = new Settings(c);
         if (s.clientId().isEmpty() || s.token().isEmpty()) throw new IOException("add your Dhan client ID and token in Settings first");
         MarketClock.setExtraHolidays(s.extraHolidayList());
+        MarketClock.setExtraEvents(s.extraEventList());
         Config cfg = s.config();
         DhanApi api = new DhanApi(new OkHttpClient(), s.clientId(), s.token());
 
@@ -131,12 +132,17 @@ public final class BacktestRunner {
         say("Running the bot's rules over " + data.spot5.size() + " bars…");
         Backtester bt = new Backtester();
         Backtester.Report r = bt.run(cfg, data, msg -> status = msg);
-        return format(r);
+        return format(r, cfg);
     }
 
-    private static String format(Backtester.Report r) {
+    private static String onOff(boolean b) { return b ? "on" : "off"; }
+
+    private static String format(Backtester.Report r, Config cfg) {
         StringBuilder b = new StringBuilder();
         b.append(r.text());
+        b.append(String.format(Locale.US, "Filters: 15-min %s · chop %s · OI %s · events %s · gap %s · re-entry %s · min target %.0f× charges\n",
+                onOff(cfg.confirm15m), onOff(cfg.chopFilter), onOff(cfg.pcrFilter), onOff(cfg.eventFilter),
+                onOff(cfg.gapCheck), onOff(cfg.reenterAfterFlip), cfg.minTargetToCharges));
         b.append("\nBY STRATEGY\n");
         if (r.byStrategy.isEmpty()) b.append("  no trades\n");
         for (Map.Entry<String, Backtester.StrategyStats> e : r.byStrategy.entrySet()) {

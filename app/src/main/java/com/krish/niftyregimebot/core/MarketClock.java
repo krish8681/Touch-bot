@@ -30,6 +30,29 @@ public final class MarketClock {
 
     private static volatile Set<LocalDate> holidays = parse(java.util.Arrays.asList(BUILT_IN_HOLIDAYS));
 
+    /** Big scheduled event days: RBI policy decision days (RBI MPC calendar 2026-27) and Union Budget days. */
+    public static final String[] BUILT_IN_EVENTS = {
+            "2026-02-01", "2026-04-08", "2026-06-05", "2026-08-05", "2026-10-07", "2026-12-04",
+            "2027-02-01", "2027-02-05"
+    };
+
+    private static volatile Set<LocalDate> events = parse(java.util.Arrays.asList(BUILT_IN_EVENTS));
+
+    public static void setExtraEvents(Collection<String> extra) {
+        List<String> all = new ArrayList<>(java.util.Arrays.asList(BUILT_IN_EVENTS));
+        if (extra != null) all.addAll(extra);
+        events = parse(all);
+    }
+
+    public static boolean eventDay(LocalDate d) { return events.contains(d); }
+
+    /** First event day after {@code from} and up to and including {@code to}, or null. */
+    public static LocalDate eventBetween(LocalDate from, LocalDate to) {
+        LocalDate best = null;
+        for (LocalDate e : events) if (e.isAfter(from) && !e.isAfter(to) && (best == null || e.isBefore(best))) best = e;
+        return best;
+    }
+
     private MarketClock() {}
 
     /** Replace the holiday list: built-in dates plus {@code extra} ("yyyy-MM-dd" strings; bad ones are ignored). */

@@ -184,6 +184,11 @@ public final class MainActivity extends Activity {
             add(t, "Bars fixed from Dhan data: " + s.barsFixed + (s.waitingForDhanBar ? "   (checking latest bar…)" : "") + "\n", DIM);
         }
 
+        if (s.state != BotState.OFF && !s.checks.isEmpty()) {
+            add(t, "\nSELF-TEST\n", DIM);
+            for (String ck : s.checks) add(t, ck + "\n", ck.startsWith("✓") ? GREEN : ck.startsWith("✗") ? RED : DIM);
+        }
+
         add(t, "\nBOT READING\n", DIM);
         add(t, "Trend   ", DIM); add(t, s.regime + "\n", regimeColor(s.regime));
         if (!s.regimeWhy.isEmpty()) add(t, "  " + s.regimeWhy + "\n", DIM);
@@ -340,6 +345,18 @@ public final class MainActivity extends Activity {
         EditText minX = field(col, "Skip a trade if its profit target is less than this × its charges", num(c.minTargetToCharges), false);
         CheckBox fly = check(col, "INTRADAY sideways: trade a long call butterfly (off = no trade; credit trades are WEEKLY only)", c.intradayButterfly);
 
+        section(col, "Entry filters and guards");
+        col.addView(text("Compare on vs off with the Test tab before you decide.", 12, DIM, false));
+        CheckBox f15 = check(col, "INTRADAY: 15-min trend must agree with the 5-min trend", c.confirm15m);
+        CheckBox fChop = check(col, "Skip trend trades while ADX is falling or the day's range is tiny", c.chopFilter);
+        CheckBox fPcr = check(col, "Open-interest check: skip a bullish trade if the put-call ratio fell over 10% today (and the reverse)", c.pcrFilter);
+        CheckBox fEvent = check(col, "Event days: no entries on RBI policy / Budget days; WEEKLY closes the day before", c.eventFilter);
+        CheckBox fGap = check(col, "WEEKLY: exit at the open if NIFTY gaps 0.8% or more against the trade", c.gapCheck);
+        CheckBox fRe = check(col, "After a trend-flip exit, allow a new trade at once (cool-down 3 min after a win, 10 min after a loss)", c.reenterAfterFlip);
+        col.addView(text("Built-in event days: RBI policy days of 2026-27 and Budget days ("
+                + String.join(", ", MarketClock.BUILT_IN_EVENTS) + ")", 12, DIM, false));
+        EditText events = field(col, "Extra event days (yyyy-MM-dd, comma separated)", settings.extraEvents(), false);
+
         section(col, "Contract");
         EditText lot = field(col, "NIFTY lot size (check NSE's current value)", num(c.lotSize), false);
         EditText maxLots = field(col, "Max lots per trade", num(c.maxLots), false);
@@ -376,6 +393,18 @@ public final class MainActivity extends Activity {
                 }
                 boolean newToken = !token.getText().toString().trim().isEmpty();
                 settings.saveExtraHolidays(hol);
+                String ev = events.getText().toString().trim();
+                for (String h : ev.split("[,\\s]+")) {
+                    if (h.isEmpty()) continue;
+                    try { java.time.LocalDate.parse(h); } catch (RuntimeException ex) { throw new IllegalArgumentException("Event day not a date (use yyyy-MM-dd): " + h); }
+                }
+                settings.saveExtraEvents(ev);
+                settings.putBool("f_confirm15m", f15.isChecked());
+                settings.putBool("f_chop", fChop.isChecked());
+                settings.putBool("f_pcr", fPcr.isChecked());
+                settings.putBool("f_event", fEvent.isChecked());
+                settings.putBool("f_gap", fGap.isChecked());
+                settings.putBool("f_reenter", fRe.isChecked());
                 settings.putBool("auto_renew_token", autoRenew.isChecked());
                 settings.saveCredentials(client.getText().toString(), token.getText().toString());
                 settings.saveTelegram(tgToken.getText().toString(), tgChat.getText().toString());

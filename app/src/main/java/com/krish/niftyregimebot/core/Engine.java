@@ -24,7 +24,7 @@ import java.util.Set;
  */
 public final class Engine implements CandleAggregator.Sink {
 
-    public enum ExitReason { TARGET, STOP, REGIME_FLIP, TIME, EXPIRY_NEAR, EMERGENCY, UNWIND }
+    public enum ExitReason { TARGET, STOP, REGIME_FLIP, TIME, EXPIRY_NEAR, EMERGENCY, UNWIND, EVENT, GAP }
 
     public interface Listener {
         void onLog(String level, String message);
@@ -81,6 +81,7 @@ public final class Engine implements CandleAggregator.Sink {
         Sizer.Result size;
         ExitReason reason;
         long startMillis;
+        double startSpot;
         String regimeText = "", ivText = "";
     }
 
@@ -112,6 +113,12 @@ public final class Engine implements CandleAggregator.Sink {
     private final Set<String> acknowledgedIds = new java.util.HashSet<>();
     private final Set<String> lastStrangerIds = new java.util.HashSet<>();
     private String entryRegimeText = "", entryIvText = "";
+    private final RegimeDetector regime15;     // 15-min trend check (INTRADAY)
+    private String lastExitKind = "";          // WIN, LOSS or FLIP (sets the next cool-down)
+    private double prevDayClose;               // last NIFTY price of the previous day (gap check)
+    private boolean gapPending;
+    private double dayOpenPcr;                 // PCR seen first after 09:30 today
+    private String pcrDay = "";
     private Candle pendingBar;                 // closed from our own ticks, waiting for Dhan's copy
     private long pendingSince;
     private int barsFixed;                     // bars corrected or filled in from Dhan's data
@@ -122,6 +129,7 @@ public final class Engine implements CandleAggregator.Sink {
         this.broker = broker;
         this.out = out;
         this.regime = new RegimeDetector(cfg);
+        this.regime15 = new RegimeDetector(cfg);
         this.ivGauge = new IvGauge(cfg);
         this.builder = new StrategyBuilder(cfg);
         this.sizer = new Sizer(cfg, charges);
@@ -248,6 +256,10 @@ public final class Engine implements CandleAggregator.Sink {
     public void onSpot(double price, long now) {
         nowMillis = now;
         if (price <= 0) return;
+        if (spot > 0 && lastSpotMillis > 0 && !MarketClock.date(now).equals(MarketClock.date(lastSpotMillis))) {
+            prevDayClose = spot;
+            gapPending = true;
+        }
         spot = price;
         lastSpotMillis = now;
         agg.onTick(price, now);
@@ -324,6 +336,7 @@ public final class Engine implements CandleAggregator.Sink {
         nowMillis = now;
         rollDayIfNeeded(now);
         agg.closeIfDue(now);
+        trackPcr();
         if (pendingBar != null && now - pendingSince >= cfg.dhanBarWaitMillis) {
             Candle c = pendingBar;
             pendingBar = null;
@@ -451,6 +464,8 @@ public final class Engine implements CandleAggregator.Sink {
             return "no entry: sideways market — INTRADAY makes no trade here (credit trades need WEEKLY; butterfly is off)";
         }
         if (tradeExpiry.isEmpty()) return "no entry: no expiry chosen";
+        String filter = entryFilters(d.pick);
+        if (filter != null) return "no entry: " + d.pick.title + " — " + filter;
 
         StrategyBuilder.Plan plan = builder.build(d.pick, spot, tradeExpiry, quotes.values());
         if (!plan.ok()) return "no entry: " + d.pick.title + " — " + plan.rejected;
@@ -471,6 +486,7 @@ public final class Engine implements CandleAggregator.Sink {
         j.plan = plan;
         j.size = size;
         j.startMillis = nowMillis;
+        j.startSpot = spot;
         j.regimeText = String.valueOf(lastReading.confirmed);
         j.ivText = d.iv.level + (Double.isNaN(d.iv.vix) ? "" : String.format(Locale.US, " (VIX %.1f)", d.iv.vix));
         for (Leg l : plan.legs) j.orders.add(new LegOrder(l, l.buy, size.qty * l.ratio));
@@ -484,6 +500,93 @@ public final class Engine implements CandleAggregator.Sink {
         return msg;
     }
 
+    /** v1.3 filters on the picked strategy. Null = allowed. */
+    private String entryFilters(StrategyGrid.Type pick) {
+        boolean trend = pick.bias != StrategyGrid.Bias.RANGE;
+        LocalDate today = MarketClock.date(nowMillis);
+        if (cfg.eventFilter) {
+            if (MarketClock.eventDay(today)) return "event day (RBI policy / Budget)";
+            if (cfg.holding == Config.Holding.WEEKLY) {
+                try {
+                    LocalDate ev = MarketClock.eventBetween(today, LocalDate.parse(tradeExpiry));
+                    if (ev != null) return "event on " + ev + " before expiry";
+                } catch (RuntimeException ignored) {}
+            }
+        }
+        if (trend && cfg.confirm15m && cfg.holding == Config.Holding.INTRADAY && agg.minutes() < 15) {
+            RegimeDetector.Regime r15 = regime15.replay(resample(bars, 15)).confirmed;
+            RegimeDetector.Regime want = pick.bias == StrategyGrid.Bias.UP ? RegimeDetector.Regime.UP : RegimeDetector.Regime.DOWN;
+            if (r15 != RegimeDetector.Regime.UNKNOWN && r15 != want) return "15-min trend is " + r15;
+        }
+        if (trend && cfg.chopFilter) {
+            int n = bars.size();
+            if (n > cfg.adxFallBars + regime.minBars()) {
+                double now = Indicators.adx(bars, cfg.adxPeriod)[0];
+                double before = Indicators.adx(bars.subList(0, n - cfg.adxFallBars), cfg.adxPeriod)[0];
+                if (now < before - 0.5) return String.format(Locale.US, "trend weakening (ADX %.1f, was %.1f)", now, before);
+            }
+            double hi = -Double.MAX_VALUE, lo = Double.MAX_VALUE;
+            for (int i = n - 1; i >= 0; i--) {
+                Candle c = bars.get(i);
+                if (!MarketClock.date(c.startMillis).equals(today)) break;
+                hi = Math.max(hi, c.high); lo = Math.min(lo, c.low);
+            }
+            if (hi > lo && spot > 0 && (hi - lo) / spot < cfg.minDayRangePct)
+                return String.format(Locale.US, "day's range only %.0f points (quiet market)", hi - lo);
+        }
+        if (trend && cfg.pcrFilter) {
+            double pcr = pcr();
+            if (pcr > 0 && dayOpenPcr > 0) {
+                double ch = pcr / dayOpenPcr - 1;
+                if (pick.bias == StrategyGrid.Bias.UP && ch < -cfg.pcrMaxChange)
+                    return String.format(Locale.US, "put-call ratio fell %.0f%% today (calls being written)", -ch * 100);
+                if (pick.bias == StrategyGrid.Bias.DOWN && ch > cfg.pcrMaxChange)
+                    return String.format(Locale.US, "put-call ratio rose %.0f%% today (puts being written)", ch * 100);
+            }
+        }
+        return null;
+    }
+
+    /** Put OI ÷ call OI for the trading expiry, strikes near NIFTY. 0 if no OI data. */
+    public double pcr() {
+        double ce = 0, pe = 0;
+        for (OptionQuote q : quotes.values()) {
+            if (!q.expiry.equals(tradeExpiry) || q.oi <= 0 || Math.abs(q.strike - spot) > cfg.pcrBandPts) continue;
+            if (q.right == OptionQuote.Right.CE) ce += q.oi; else pe += q.oi;
+        }
+        return ce > 0 ? pe / ce : 0;
+    }
+
+    private void trackPcr() {
+        String today = MarketClock.date(nowMillis).toString();
+        if (today.equals(pcrDay) || MarketClock.minuteOfDay(nowMillis) < 9 * 60 + 30) return;
+        double p = pcr();
+        if (p > 0) { dayOpenPcr = p; pcrDay = today; }
+    }
+
+    /** Group bars into N-minute bars aligned to 09:15. */
+    static List<Candle> resample(List<Candle> in, int minutes) {
+        List<Candle> out = new ArrayList<>();
+        Candle cur = null;
+        long curKey = Long.MIN_VALUE;
+        for (Candle c : in) {
+            int m = MarketClock.minuteOfDay(c.startMillis) - (9 * 60 + 15);
+            long dayStart = c.startMillis - (long) (MarketClock.minuteOfDay(c.startMillis)) * 60_000L
+                    - (c.startMillis % 60_000L);
+            long key = dayStart + (9 * 60 + 15 + Math.floorDiv(m, minutes) * minutes) * 60_000L;
+            if (cur == null || key != curKey) {
+                cur = new Candle(key, c.open, c.high, c.low, c.close);
+                out.add(cur);
+                curKey = key;
+            } else {
+                cur.high = Math.max(cur.high, c.high);
+                cur.low = Math.min(cur.low, c.low);
+                cur.close = c.close;
+            }
+        }
+        return out;
+    }
+
     /** Null if entries are allowed now, else the reason. */
     String entryBlock() {
         int m = MarketClock.minuteOfDay(nowMillis);
@@ -493,7 +596,9 @@ public final class Engine implements CandleAggregator.Sink {
         if (day.entries >= cfg.maxTradesPerDay) return "max trades for today reached";
         if (day.consecutiveLosses >= cfg.maxConsecutiveLosses) return day.consecutiveLosses + " losses in a row today";
         if (day.realizedPnl <= -cfg.dailyLossLimit) return "daily loss limit reached";
-        if (day.lastExitMillis > 0 && nowMillis - day.lastExitMillis < cfg.cooldownMinutes * 60_000L) return "cooling down after last exit";
+        double cool = "FLIP".equals(lastExitKind) && cfg.reenterAfterFlip ? 0
+                : "WIN".equals(lastExitKind) ? cfg.cooldownAfterWinMinutes : cfg.cooldownMinutes;
+        if (day.lastExitMillis > 0 && nowMillis - day.lastExitMillis < cool * 60_000L) return "cooling down after last exit";
         return null;
     }
 
@@ -538,8 +643,27 @@ public final class Engine implements CandleAggregator.Sink {
         if (position.holding == Config.Holding.INTRADAY) {
             if (m >= cfg.squareOff && MarketClock.tradingDay(MarketClock.date(now))) return ExitReason.TIME;
             if (MarketClock.date(now).isAfter(MarketClock.date(position.entryMillis))) return ExitReason.TIME;
-        } else if (MarketClock.weeklyExitDue(position.expiry, now, cfg.squareOff)) {
-            return ExitReason.EXPIRY_NEAR;
+        } else {
+            if (MarketClock.weeklyExitDue(position.expiry, now, cfg.squareOff)) return ExitReason.EXPIRY_NEAR;
+            LocalDate today = MarketClock.date(now);
+            if (cfg.eventFilter && MarketClock.tradingDay(today)) {
+                LocalDate next = MarketClock.nextTradingDay(today.plusDays(1));
+                boolean eventNext = MarketClock.eventDay(next) || MarketClock.eventBetween(today, next) != null;
+                if ((eventNext && m >= cfg.squareOff) || MarketClock.eventDay(today)) return ExitReason.EVENT;
+            }
+            if (gapPending && m >= 9 * 60 + 20) gapPending = false;   // only the opening minutes count
+            if (cfg.gapCheck && gapPending && prevDayClose > 0 && m >= 9 * 60 + 15
+                    && MarketClock.date(position.entryMillis).isBefore(today)) {
+                gapPending = false;
+                double gap = (spot - prevDayClose) / prevDayClose;
+                boolean against = position.type.bias == StrategyGrid.Bias.UP ? gap <= -cfg.gapExitPct
+                        : position.type.bias == StrategyGrid.Bias.DOWN ? gap >= cfg.gapExitPct
+                        : Math.abs(gap) >= cfg.gapExitPct;
+                if (against) {
+                    log("WARN", String.format(Locale.US, "NIFTY opened %.2f%% from yesterday's close — against the trade", gap * 100));
+                    return ExitReason.GAP;
+                }
+            }
         }
         return null;
     }
@@ -569,6 +693,11 @@ public final class Engine implements CandleAggregator.Sink {
             int idxBefore = j.idx;
             if (o.req == null) {
                 if (now < o.retryAfter) return;
+                if (j.kind == JobKind.ENTRY && j.idx > 0 && cfg.entryMaxSpotMove > 0 && j.startSpot > 0
+                        && Math.abs(spot - j.startSpot) > cfg.entryMaxSpotMove) {
+                    abortEntry(String.format(Locale.US, "NIFTY moved %.0f points while placing legs", Math.abs(spot - j.startSpot)));
+                    continue;
+                }
                 if (!submit(o, now)) {
                     if (j.kind == JobKind.ENTRY && now - j.startMillis > 30_000) abortEntry("no usable price for " + o.leg.label());
                     return;
@@ -815,6 +944,7 @@ public final class Engine implements CandleAggregator.Sink {
         out.onPositionSaved("");
         out.onAlert(String.format(Locale.US, "Closed %s — %s. Net ₹%,.0f after ₹%,.0f charges (day ₹%,.0f)",
                 t.strategy, t.exitReason, t.net, t.charges, day.realizedPnl));
+        lastExitKind = j.reason == ExitReason.REGIME_FLIP ? "FLIP" : t.net >= 0 ? "WIN" : "LOSS";
         if (day.realizedPnl <= -cfg.dailyLossLimit) out.onAlert("Daily loss limit reached. No more entries today.");
         else if (day.consecutiveLosses >= cfg.maxConsecutiveLosses) out.onAlert(day.consecutiveLosses + " losses in a row — no more entries today.");
     }
@@ -829,6 +959,7 @@ public final class Engine implements CandleAggregator.Sink {
         }
         day.realizedPnl += pnl;
         day.lastExitMillis = nowMillis;
+        lastExitKind = "LOSS";
         out.onStatsChanged(day);
         out.onAlert(String.format(Locale.US, "Half-built entry closed. Cost ₹%,.0f.", pnl));
     }

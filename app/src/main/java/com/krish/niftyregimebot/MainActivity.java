@@ -44,7 +44,8 @@ public final class MainActivity extends Activity {
             TEXT = Color.parseColor("#E6EDF3"), DIM = Color.parseColor("#7D8B99"),
             GREEN = Color.parseColor("#00E676"), RED = Color.parseColor("#FF1744"),
             AMBER = Color.parseColor("#FFC400"), BLUE = Color.parseColor("#40C4FF");
-    private static final String[] TABS = {"Home", "Decisions", "Trades", "Log", "Settings"};
+    private static final String[] TABS = {"Home", "Decisions", "Trades", "Log", "Test", "Settings"};
+    private static final int TAB_TEST = 4, TAB_SETTINGS = 5;
     private static final DateTimeFormatter DHM = DateTimeFormatter.ofPattern("dd MMM HH:mm").withZone(MarketClock.IST);
 
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -111,7 +112,8 @@ public final class MainActivity extends Activity {
         listText = null;
         switch (idx) {
             case 0: buildHome(); break;
-            case 4: buildSettings(); break;
+            case TAB_TEST: buildTest(); break;
+            case TAB_SETTINGS: buildSettings(); break;
             default:
                 listText = text("", 13, TEXT, false);
                 listText.setPadding(dp(14), dp(8), dp(14), dp(24));
@@ -202,7 +204,9 @@ public final class MainActivity extends Activity {
                 add(t, String.format(Locale.US, "%-16s %.2f → %.2f\n", l.label, l.entry, l.now), TEXT);
             }
             add(t, "Open P&L  ", TEXT);
-            add(t, "₹" + BotService.money(p.openPnl) + (p.stale ? "  (prices old)" : "") + "\n", p.openPnl >= 0 ? GREEN : RED);
+            add(t, "₹" + BotService.money(p.openPnl) + (p.stale ? "  (prices old)" : "") + "  if closed now\n", p.openPnl >= 0 ? GREEN : RED);
+            add(t, "Fair value ", DIM);
+            add(t, "₹" + BotService.money(p.fairPnl) + "  (stop uses this)\n", p.fairPnl >= 0 ? GREEN : RED);
             add(t, "Target ", DIM); add(t, "₹" + BotService.money(p.target), GREEN);
             add(t, "   Stop ", DIM); add(t, "₹" + BotService.money(p.stop) + "\n", RED);
             add(t, "Max profit ₹" + BotService.money(p.maxProfit) + "   max loss ₹" + BotService.money(p.maxLoss) + "\n", DIM);
@@ -255,6 +259,56 @@ public final class MainActivity extends Activity {
         listText.setText(t);
     }
 
+    // ------------------------------------------------------------------ Test (backtest)
+
+    private TextView testStatus, testText;
+    private Button btnCancelTest;
+
+    private void buildTest() {
+        LinearLayout col = column();
+        col.addView(text("Backtest: runs the bot's own rules over past NIFTY and option prices from Dhan, "
+                + "with your current Settings (holding mode, risk, targets) and charges. No orders are placed. "
+                + "Takes about 1 minute per 30 days.", 12, DIM, false));
+        LinearLayout row = row();
+        for (int d : new int[]{30, 60, 90}) {
+            final int days = d;
+            row.addView(button(d + " days", GREEN, v -> {
+                if (BacktestRunner.running()) return;
+                BacktestRunner.start(this, days);
+            }), weight());
+        }
+        col.addView(row);
+        btnCancelTest = button("Cancel test", RED, v -> BacktestRunner.cancel());
+        col.addView(btnCancelTest);
+        testStatus = text("", 13, AMBER, true);
+        testStatus.setPadding(dp(4), dp(8), dp(4), dp(4));
+        col.addView(testStatus);
+        testText = text("", 12, TEXT, false);
+        testText.setPadding(dp(4), dp(4), dp(4), dp(24));
+        testText.setTextIsSelectable(true);
+        col.addView(testText);
+        scroll.addView(col);
+    }
+
+    private void refreshTest() {
+        boolean run = BacktestRunner.running();
+        btnCancelTest.setVisibility(run ? View.VISIBLE : View.GONE);
+        String st = BacktestRunner.status();
+        testStatus.setText(run ? "⏳ " + st : st);
+        String r = BacktestRunner.result(this);
+        SpannableStringBuilder t = new SpannableStringBuilder();
+        if (r.isEmpty()) add(t, "No test run yet. Tap 30, 60 or 90 days.\n", DIM);
+        for (String line : r.split("\n")) {
+            int color = TEXT;
+            if (line.matches("^[A-Z][A-Z ()]+$")) color = AMBER;
+            else if (line.contains("net ₹-") || line.matches(".*  -[0-9,]+$") || line.startsWith("Net ₹-")) color = RED;
+            else if (line.contains("net ₹") || line.matches(".*  [0-9,]+$") || line.startsWith("Net ₹")) color = GREEN;
+            else if (line.startsWith("  •")) color = DIM;
+            add(t, line + "\n", color);
+        }
+        testText.setText(t);
+    }
+
     // ------------------------------------------------------------------ Settings
 
     private void buildSettings() {
@@ -283,6 +337,8 @@ public final class MainActivity extends Activity {
         EditText tCredit = field(col, "Take profit at % of max profit (credit spreads)", num(c.targetPctCredit * 100), false);
         EditText tDebit = field(col, "Take profit at % of max profit (debit spreads)", num(c.targetPctDebit * 100), false);
         EditText stop = field(col, "Stop loss at % of max loss", num(c.stopPctOfMaxLoss * 100), false);
+        EditText minX = field(col, "Skip a trade if its profit target is less than this × its charges", num(c.minTargetToCharges), false);
+        CheckBox fly = check(col, "INTRADAY sideways: trade a long call butterfly (off = no trade; credit trades are WEEKLY only)", c.intradayButterfly);
 
         section(col, "Contract");
         EditText lot = field(col, "NIFTY lot size (check NSE's current value)", num(c.lotSize), false);
@@ -309,6 +365,8 @@ public final class MainActivity extends Activity {
                 put("target_credit_pct", tCredit, 10, 90);
                 put("target_debit_pct", tDebit, 10, 100);
                 put("stop_pct", stop, 10, 100);
+                put("min_target_x_charges", minX, 0, 20);
+                settings.putBool("intraday_butterfly", fly.isChecked());
                 put("lot_size", lot, 1, 5000);
                 put("max_lots", maxLots, 1, 100);
                 String hol = holidays.getText().toString().trim();
@@ -330,7 +388,7 @@ public final class MainActivity extends Activity {
                 } else {
                     Toast.makeText(this, "Saved. Stop and start the bot to use new settings.", Toast.LENGTH_LONG).show();
                 }
-                show(4);
+                show(TAB_SETTINGS);
             } catch (IllegalArgumentException e) {
                 Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
             }
@@ -352,13 +410,13 @@ public final class MainActivity extends Activity {
             }
             if (live) {
                 settings.putBool("live", false);
-                show(4);
+                show(TAB_SETTINGS);
                 return;
             }
             confirm("Turn on LIVE orders?", "The bot will place REAL orders on your Dhan account with real money.\n\n"
                     + "Your static IP must be registered with Dhan, or every order fails (DH-905).\n\nAre you sure?", () -> {
                 settings.putBool("live", true);
-                show(4);
+                show(TAB_SETTINGS);
             });
         }));
 
@@ -390,6 +448,7 @@ public final class MainActivity extends Activity {
         title.setText(getString(R.string.app_name) + "  ·  " + (live ? "LIVE" : "PAPER") + "  ·  " + hold);
         title.setTextColor(live ? RED : AMBER);
         if (tab == 0 && homeText != null) refreshHome();
+        else if (tab == TAB_TEST && testText != null) refreshTest();
         else if (listText != null) refreshList();
     }
 

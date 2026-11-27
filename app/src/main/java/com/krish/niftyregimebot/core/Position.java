@@ -22,7 +22,8 @@ public final class Position {
     public boolean live;
 
     // runtime, not saved
-    public double openPnl;
+    public double openPnl;     // if closed now: longs sold at bid, shorts bought at ask (used for target)
+    public double fairPnl;     // same, but a leg with a wide bid-ask gap is valued at mid (used for stop)
     public long lastMarkMillis;
     public boolean stale;
 
@@ -39,6 +40,26 @@ public final class Position {
      * Open P&L in ₹ if closed now: long legs sold at bid, short legs bought at ask.
      * Returns NaN if any leg has no usable quote.
      */
+    /**
+     * Fair value P&L: like {@link #markToMarket(Map)} but any leg whose bid-ask gap is wider than
+     * {@code wideGapPct} of its mid is valued at mid, so a wide quote alone cannot trigger a stop.
+     */
+    public double fairMark(Map<String, OptionQuote> quotes, double wideGapPct) {
+        double pnl = 0;
+        for (Leg l : legs) {
+            OptionQuote q = quotes.get(l.securityId);
+            if (q == null) return Double.NaN;
+            double px = l.buy ? q.bid : q.ask;
+            if (q.hasBook()) {
+                double mid = q.mid();
+                if (mid > 0 && q.spread() / mid > wideGapPct) px = mid;
+            }
+            if (px <= 0) return Double.NaN;
+            pnl += (l.buy ? px - l.price : l.price - px) * l.ratio * qty;
+        }
+        return pnl;
+    }
+
     public double markToMarket(Map<String, OptionQuote> quotes) {
         double pnl = 0;
         for (Leg l : legs) {

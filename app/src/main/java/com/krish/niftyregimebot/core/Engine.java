@@ -415,7 +415,7 @@ public final class Engine implements CandleAggregator.Sink {
         d.timeMillis = nowMillis == 0 ? c.startMillis : nowMillis;
         d.regime = lastReading;
         d.iv = ivGauge.read(atmIv());
-        d.pick = StrategyGrid.pick(lastReading.confirmed, d.iv.level);
+        d.pick = StrategyGrid.pick(lastReading.confirmed, d.iv.level, cfg);
         lastDecision = d;
 
         if (partial) {
@@ -446,7 +446,9 @@ public final class Engine implements CandleAggregator.Sink {
         String block = entryBlock();
         if (block != null) return "no entry: " + block;
         if (d.pick == StrategyGrid.Type.NONE) {
-            return "no entry: " + (lastReading.confirmed == RegimeDetector.Regime.UNKNOWN ? "regime not ready" : "IV level unknown");
+            if (lastReading.confirmed == RegimeDetector.Regime.UNKNOWN) return "no entry: regime not ready";
+            if (d.iv.level == IvGauge.Level.UNKNOWN) return "no entry: IV level unknown";
+            return "no entry: sideways market — INTRADAY makes no trade here (credit trades need WEEKLY; butterfly is off)";
         }
         if (tradeExpiry.isEmpty()) return "no entry: no expiry chosen";
 
@@ -457,6 +459,12 @@ public final class Engine implements CandleAggregator.Sink {
         double budget = Math.min(cfg.riskPerTrade, remainingDaily);
         Sizer.Result size = sizer.size(plan, budget, availableFunds);
         if (!size.ok()) return "no entry: " + d.pick.title + " — " + size.why;
+        double tgtPct = d.pick == StrategyGrid.Type.LONG_CALL_BUTTERFLY ? cfg.targetPctButterfly
+                : d.pick.credit ? cfg.targetPctCredit : cfg.targetPctDebit;
+        double targetProfit = Double.isInfinite(size.maxProfitRs) ? cfg.riskPerTrade : tgtPct * size.maxProfitRs;
+        if (size.chargesRs > 0 && targetProfit < cfg.minTargetToCharges * size.chargesRs)
+            return String.format(Locale.US, "no entry: %s — target profit ₹%,.0f is less than %.0f× charges (₹%,.0f)",
+                    d.pick.title, targetProfit, cfg.minTargetToCharges, size.chargesRs);
 
         Job j = new Job();
         j.kind = JobKind.ENTRY;
@@ -505,6 +513,8 @@ public final class Engine implements CandleAggregator.Sink {
         double pnl = position.markToMarket(quotes);
         if (!Double.isNaN(pnl)) {
             position.openPnl = pnl;
+            double fair = position.fairMark(quotes, cfg.wideGapPct);
+            position.fairPnl = Double.isNaN(fair) ? pnl : fair;
             position.lastMarkMillis = now;
             position.stale = false;
         } else if (now - position.lastMarkMillis > 30_000) {
@@ -521,7 +531,9 @@ public final class Engine implements CandleAggregator.Sink {
 
     private ExitReason exitReason(long now) {
         if (position.openPnl >= position.targetRs && position.targetRs > 0) return ExitReason.TARGET;
-        if (position.openPnl <= -position.stopRs && position.stopRs > 0) return ExitReason.STOP;
+        // Stop uses the fair value (mid for wide quotes); a hard floor still applies on the close-now value.
+        if (position.fairPnl <= -position.stopRs && position.stopRs > 0) return ExitReason.STOP;
+        if (position.openPnl <= -cfg.hardStopPctOfMaxLoss * position.maxLossRs() && position.stopRs > 0) return ExitReason.STOP;
         int m = MarketClock.minuteOfDay(now);
         if (position.holding == Config.Holding.INTRADAY) {
             if (m >= cfg.squareOff && MarketClock.tradingDay(MarketClock.date(now))) return ExitReason.TIME;

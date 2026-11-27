@@ -37,6 +37,10 @@ public final class Settings {
     /** When the current token was pasted or renewed (0 = unknown). */
     public long tokenMadeMillis() { return p.getLong("token_made", 0L); }
 
+    public String lastBacktest() { return p.getString("last_backtest", ""); }
+    public void saveLastBacktest(String text) { p.edit().putString("last_backtest", text).apply(); }
+    public boolean intradayButterfly() { return p.getBoolean("intraday_butterfly", false); }
+
     public boolean autoRenewToken() { return p.getBoolean("auto_renew_token", true); }
 
     /** Extra NSE holidays the user typed (yyyy-MM-dd, comma separated), e.g. next year's list. */
@@ -69,6 +73,8 @@ public final class Settings {
         c.targetPctDebit = d("target_debit_pct", c.targetPctDebit * 100) / 100;
         c.stopPctOfMaxLoss = d("stop_pct", c.stopPctOfMaxLoss * 100) / 100;
         c.holding = weekly() ? Config.Holding.WEEKLY : Config.Holding.INTRADAY;
+        c.minTargetToCharges = d("min_target_x_charges", c.minTargetToCharges);
+        c.intradayButterfly = intradayButterfly();
         return c;
     }
 

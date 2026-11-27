@@ -94,6 +94,8 @@ public class EngineFlowTest {
     @Test public void highIvSidewaysOpensIronCondorAndStopsOut() {
         Config c = TestUtil.cfg();
         c.riskPerTrade = 20_000;
+        c.holding = Config.Holding.WEEKLY;            // condor is a WEEKLY-only strategy from v1.2
+        c.weeklyBarMinutes = 5;                       // keep the test on 5-min bars
         Rec rec = new Rec();
         Engine e = engine(c, rec, 19, 0, 26000);
         assertEquals(RegimeDetector.Regime.SIDEWAYS, e.lastReading().confirmed);

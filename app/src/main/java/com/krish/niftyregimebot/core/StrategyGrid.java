@@ -34,6 +34,26 @@ public final class StrategyGrid {
 
     private StrategyGrid() {}
 
+    /**
+     * Holding-aware pick. INTRADAY uses debit strategies only: credit spreads and the condor earn
+     * from time decay, which is small inside one day (the expiry-day contract is never used).
+     * UP/DOWN with high IV → the debit spread; SIDEWAYS → long call butterfly only if allowed,
+     * else no trade.
+     */
+    public static Type pick(RegimeDetector.Regime regime, IvGauge.Level iv, Config cfg) {
+        Type t = pick(regime, iv);
+        if (cfg.holding != Config.Holding.INTRADAY || !t.credit) {
+            if (cfg.holding == Config.Holding.INTRADAY && t == Type.LONG_CALL_BUTTERFLY && !cfg.intradayButterfly) return Type.NONE;
+            return t;
+        }
+        switch (t) {
+            case BULL_PUT_SPREAD: return Type.BULL_CALL_SPREAD;
+            case BEAR_CALL_SPREAD: return Type.BEAR_PUT_SPREAD;
+            case IRON_CONDOR: return cfg.intradayButterfly ? Type.LONG_CALL_BUTTERFLY : Type.NONE;
+            default: return t;
+        }
+    }
+
     public static Type pick(RegimeDetector.Regime regime, IvGauge.Level iv) {
         if (regime == RegimeDetector.Regime.UNKNOWN || iv == IvGauge.Level.UNKNOWN) return Type.NONE;
         switch (regime) {

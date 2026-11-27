@@ -25,7 +25,7 @@ public final class BotHub {
     public static final class PositionView {
         public String title, expiry, holding;
         public int qty, lots;
-        public double netPremium, openPnl, target, stop, maxLoss, maxProfit;
+        public double netPremium, openPnl, fairPnl, target, stop, maxLoss, maxProfit;
         public long entryMillis;
         public boolean stale;
         public final List<LegView> legs = new ArrayList<>();

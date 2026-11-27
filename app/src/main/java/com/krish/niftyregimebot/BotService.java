@@ -613,6 +613,7 @@ public final class BotService extends Service {
                 v.lots = p.qty / Math.max(1, cfg.lotSize);
                 v.netPremium = p.netPremium;
                 v.openPnl = p.openPnl;
+                v.fairPnl = p.fairPnl;
                 v.target = p.targetRs;
                 v.stop = p.stopRs;
                 v.maxLoss = p.maxLossRs();

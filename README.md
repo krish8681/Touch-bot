@@ -40,6 +40,19 @@ It runs fully on the phone. No PC or server is needed.
 - Open positions are saved, so a WEEKLY trade survives a phone restart.
 - Every minute in live mode the bot checks Dhan's positions and warns if they do not match.
 
+## What's new in v1.2
+
+- **Test tab (backtest).** Runs the bot's own rules over the last 30/60/90 days of NIFTY and option
+  prices from Dhan (expired options data), with your settings and charges. Shows trades, win rate,
+  net after charges, worst losing streak, drawdown, results per strategy, and why trades were skipped.
+  Limits: bar prices with a small bid/ask gap; next-week options only ATM±3 strikes; VIX = previous close.
+- **INTRADAY uses debit trades only** (bull call / bear put spreads). Credit spreads and the iron condor
+  are WEEKLY only, because time decay inside one day is small. INTRADAY sideways = no trade
+  (or a butterfly, if you switch it on in Settings).
+- **Charges check.** A trade is skipped if its profit target is less than 3× its charges.
+- **Fairer stop.** The stop uses a fair value: a leg with a wide bid/ask gap (over 5%) is valued at mid.
+  A hard stop at 80% of max loss still uses the close-now value. Target still uses the close-now value.
+
 ## Data handling (v1.1)
 
 - **Bars match Dhan's chart.** After each bar closes the bot fetches Dhan's own copy and uses it.
@@ -60,7 +73,7 @@ It runs fully on the phone. No PC or server is needed.
 
 ## How to use
 
-1. Install `NiftyRegimeBot-v1.1-release.apk`.
+1. Install `NiftyRegimeBot-v1.2-release.apk`.
 2. Settings → paste Dhan **Client ID** and **access token**. Check the lot size (65) and tick the box.
 3. Choose INTRADAY or WEEKLY. Set your max loss per trade. Save.
 4. Settings → Battery → set the app to **Unrestricted**.

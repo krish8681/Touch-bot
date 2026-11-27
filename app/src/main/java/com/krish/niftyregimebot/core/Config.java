@@ -58,6 +58,12 @@ public final class Config {
     public int minDaysToExpiryIntraday = 1;   // never trade a contract on its expiry day
     public int minDaysToExpiryWeekly = 3;     // weekly entries use an expiry ≥ 3 calendar days away
 
+    // ---- v1.2
+    public double wideGapPct = 0.05;          // leg bid-ask gap above 5% of mid → stop check uses mid
+    public double hardStopPctOfMaxLoss = 0.80; // close-now loss beyond 80% of max loss always stops
+    public double minTargetToCharges = 3.0;   // skip a trade whose profit target is under 3× its charges
+    public boolean intradayButterfly = false; // INTRADAY sideways: false = no trade, true = long call butterfly
+
     // ---- bar data
     public long dhanBarWaitMillis = 60_000;   // after a bar closes, wait this long for Dhan's own copy of it
     public long partialBarMillis = 30_000;    // own bar whose first tick came later than this is incomplete

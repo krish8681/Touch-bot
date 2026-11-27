@@ -178,6 +178,71 @@ public final class DhanApi {
         return out;
     }
 
+    /** Daily closes with their dates (IST), oldest first. */
+    public java.util.TreeMap<LocalDate, Double> indexDailySeries(String securityId, LocalDate from, LocalDate to) throws IOException {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("securityId", securityId);
+        body.put("exchangeSegment", "IDX_I");
+        body.put("instrument", "INDEX");
+        body.put("oi", false);
+        body.put("fromDate", from.toString());
+        body.put("toDate", to.toString());
+        Map<String, Object> r = Json.obj(post("/charts/historical", body, false));
+        List<Object> c = Json.arr(r.get("close")), t = Json.arr(r.get("timestamp"));
+        java.util.TreeMap<LocalDate, Double> out = new java.util.TreeMap<>();
+        for (int i = 0; i < Math.min(c.size(), t.size()); i++) {
+            if (!(c.get(i) instanceof Number) || !(t.get(i) instanceof Number)) continue;
+            long ms = (long) (((Number) t.get(i)).doubleValue() * 1000);
+            out.put(com.krish.niftyregimebot.core.MarketClock.date(ms), ((Number) c.get(i)).doubleValue());
+        }
+        return out;
+    }
+
+    /**
+     * Dhan "expired options data" (POST /charts/rollingoption): 5-minute bars of the NIFTY weekly
+     * option at a strike relative to ATM ({@code offset} 0 = ATM, +3 = ATM+3), near (1) or next (2)
+     * expiry. Up to 30 days per call; toDate is not included. Each bar carries its real strike.
+     */
+    public List<com.krish.niftyregimebot.core.Backtester.OptBar> rollingOption(int expiryCode, int offset, boolean call,
+                                                                               LocalDate from, LocalDate to) throws IOException {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("exchangeSegment", "NSE_FNO");
+        body.put("interval", "5");
+        body.put("securityId", 13);
+        body.put("instrument", "OPTIDX");
+        body.put("expiryFlag", "WEEK");
+        body.put("expiryCode", expiryCode);
+        body.put("strike", offset == 0 ? "ATM" : offset > 0 ? "ATM+" + offset : "ATM" + offset);
+        body.put("drvOptionType", call ? "CALL" : "PUT");
+        List<Object> req = new ArrayList<>();
+        req.add("open"); req.add("close"); req.add("iv"); req.add("strike"); req.add("spot");
+        body.put("requiredData", req);
+        body.put("fromDate", from.toString());
+        body.put("toDate", to.toString());
+        Map<String, Object> r = Json.obj(post("/charts/rollingoption", body, false));
+        Map<String, Object> data = r.get("data") instanceof Map ? Json.obj(r.get("data")) : r;
+        Object side = data.get(call ? "ce" : "pe");
+        List<com.krish.niftyregimebot.core.Backtester.OptBar> out = new ArrayList<>();
+        if (!(side instanceof Map)) return out;
+        Map<String, Object> s = Json.obj(side);
+        List<Object> t = Json.arr(s.get("timestamp")), o = Json.arr(s.get("open")), c = Json.arr(s.get("close")),
+                iv = Json.arr(s.get("iv")), k = Json.arr(s.get("strike"));
+        int n = Math.min(Math.min(t.size(), o.size()), Math.min(c.size(), k.size()));
+        com.krish.niftyregimebot.core.OptionQuote.Right right = call ? com.krish.niftyregimebot.core.OptionQuote.Right.CE
+                : com.krish.niftyregimebot.core.OptionQuote.Right.PE;
+        for (int i = 0; i < n; i++) {
+            if (!(t.get(i) instanceof Number) || !(k.get(i) instanceof Number)) continue;
+            long ms = (long) (((Number) t.get(i)).doubleValue() * 1000);
+            double strike = ((Number) k.get(i)).doubleValue();
+            double op = o.get(i) instanceof Number ? ((Number) o.get(i)).doubleValue() : 0;
+            double cl = c.get(i) instanceof Number ? ((Number) c.get(i)).doubleValue() : 0;
+            double v = i < iv.size() && iv.get(i) instanceof Number ? ((Number) iv.get(i)).doubleValue() : 0;
+            if (strike <= 0 || cl <= 0) continue;
+            out.add(new com.krish.niftyregimebot.core.Backtester.OptBar(ms, expiryCode, right, strike, op > 0 ? op : cl, cl, v));
+        }
+        return out;
+    }
+
     // ------------------------------------------------------------ orders (used only when live is unlocked)
 
     public Map<String, Object> placeOrder(Map<String, Object> body) throws IOException {

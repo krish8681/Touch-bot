@@ -40,6 +40,29 @@ It runs fully on the phone. No PC or server is needed.
 - Open positions are saved, so a WEEKLY trade survives a phone restart.
 - Every minute in live mode the bot checks Dhan's positions and warns if they do not match.
 
+## v2.0 — clean rewrite
+
+Same trading rules as v1.3, rebuilt as small parts. The full strategy is written up in the doc
+"Nifty Regime Bot — Strategy and Rules (v2.0)".
+
+Brain (`core/`, plain Java, 48 tests):
+
+| Part | Job |
+| --- | --- |
+| `Engine` | Joins the parts; one decision per closed bar, exits every second |
+| `BarBook` | Bars, Dhan bar sync and repair, trend reading (5/60-min + 15-min check) |
+| `IvGauge` | IV level from India VIX percentile (ATM IV fallback) |
+| `StrategyGrid` | Trend × IV → one hedged strategy (INTRADAY debit-only) |
+| `EntryGate` | Time, limits, cool-down, filters, charges check |
+| `StrategyBuilder` / `Sizer` | Strikes and lots |
+| `OrderRunner` | Legs one by one, legging guard, unwind, never-give-up exits |
+| `ExitRules` | Target, stops, time, expiry, event, gap |
+| `Ledger` | Position and trade bookkeeping after charges |
+| `Backtester` | Replays history through the same Engine |
+
+App: `BotService` (runs it) · `DhanLink` (all Dhan traffic) · `Alerts` · `StatusBuilder` ·
+`MainActivity` + `SettingsScreen` + `Ui` (screens) · `BacktestRunner` · `Reminder`.
+
 ## What's new in v1.3 (each can be switched off in Settings → Entry filters)
 
 - **15-min trend check** (INTRADAY): the 15-minute trend must agree with the 5-minute trend.
@@ -86,7 +109,7 @@ It runs fully on the phone. No PC or server is needed.
 
 ## How to use
 
-1. Install `NiftyRegimeBot-v1.3-release.apk`.
+1. Install `NiftyRegimeBot-v2.0-release.apk`.
 2. Settings → paste Dhan **Client ID** and **access token**. Check the lot size (65) and tick the box.
 3. Choose INTRADAY or WEEKLY. Set your max loss per trade. Save.
 4. Settings → Battery → set the app to **Unrestricted**.
